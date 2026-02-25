@@ -1,4 +1,7 @@
-namespace MonopolyServer;
+using MonopolyServer.Hubs;
+using MonopolyServer.Game.Services;
+
+namespace MonopolyServer.Api;
 
 public class Program
 {
@@ -6,42 +9,58 @@ public class Program
     {
         var builder = WebApplication.CreateBuilder(args);
 
-        // Add services to the container.
-        builder.Services.AddAuthorization();
+        // Add services to the container
+        builder.Services.AddSignalR();
+        builder.Services.AddCors(options =>
+        {
+            options.AddPolicy("AllowAll", policy =>
+            {
+                policy
+                    .AllowAnyOrigin()
+                    .AllowAnyMethod()
+                    .AllowAnyHeader();
+            });
+        });
 
-        // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-        builder.Services.AddOpenApi();
+        // Register game services (singleton so games persist across requests)
+        builder.Services.AddSingleton<GameRoomManager>();
+        builder.Services.AddSingleton<TradeService>();
+
+        // Add logging
+        builder.Services.AddLogging(config =>
+        {
+            config.AddConsole();
+            config.AddDebug();
+        });
 
         var app = builder.Build();
 
-        // Configure the HTTP request pipeline.
-        if (app.Environment.IsDevelopment())
-        {
-            app.MapOpenApi();
-        }
+        // Configure the HTTP request pipeline
+        app.UseRouting();
 
-        app.UseHttpsRedirection();
+        // Enable CORS for SignalR
+        app.UseCors("AllowAll");
 
-        app.UseAuthorization();
+        // Map SignalR hub
+        app.MapHub<GameHub>("/game-hub");
 
-        var summaries = new[]
-        {
-            "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-        };
+        // Health check endpoint
+        app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
-        app.MapGet("/weatherforecast", (HttpContext httpContext) =>
+        // Diagnostics endpoint
+        app.MapGet("/api/games/stats", (GameRoomManager roomManager) =>
+            Results.Ok(roomManager.GetStats())
+        );
+
+        app.MapGet("/api/games", (GameRoomManager roomManager) =>
+            Results.Ok(roomManager.GetAllGames().Select(g => new
             {
-                var forecast = Enumerable.Range(1, 5).Select(index =>
-                        new WeatherForecast
-                        {
-                            Date = DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-                            TemperatureC = Random.Shared.Next(-20, 55),
-                            Summary = summaries[Random.Shared.Next(summaries.Length)]
-                        })
-                    .ToArray();
-                return forecast;
-            })
-            .WithName("GetWeatherForecast");
+                gameId = g.GameId,
+                status = g.Status.ToString(),
+                playerCount = g.Players.Count,
+                hostId = g.HostId
+            }))
+        );
 
         app.Run();
     }
