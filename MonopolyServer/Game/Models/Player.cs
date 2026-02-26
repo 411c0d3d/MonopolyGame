@@ -1,4 +1,6 @@
-﻿namespace MonopolyServer.Game.Models;
+﻿using MonopolyServer.Game.Constants;
+
+namespace MonopolyServer.Game.Models;
 
 /// <summary>
 /// Represents a player in the Monopoly game, tracking identity, finances, board position, jail status, kept cards, and per-turn state.
@@ -91,7 +93,7 @@ public class Player
     /// <param name="id">Unique player identifier.</param>
     /// <param name="name">Player display name.</param>
     /// <param name="startingCash">Initial cash amount (default 1500).</param>
-    public Player(string id, string name, int startingCash = 1500)
+    public Player(string id, string name, int startingCash = GameConstants.StartingCash)
     {
         Id = id;
         Name = name;
