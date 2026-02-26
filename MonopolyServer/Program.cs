@@ -1,8 +1,14 @@
+using MonopolyServer.Game.Constants;
 using MonopolyServer.Hubs;
 using MonopolyServer.Game.Services;
+using MonopolyServer.Infrastructure;
 
-namespace MonopolyServer.Api;
+namespace MonopolyServer;
 
+/// <summary>
+/// Entry point for the MonopolyServer application. Configures services (SignalR, CORS, game services, logging)
+/// and maps HTTP and SignalR endpoints before starting the web host.
+/// </summary>
 public class Program
 {
     public static void Main(string[] args)
@@ -11,6 +17,7 @@ public class Program
 
         // Add services to the container
         builder.Services.AddSignalR();
+
         builder.Services.AddCors(options =>
         {
             options.AddPolicy("AllowAll", policy =>
@@ -22,11 +29,14 @@ public class Program
             });
         });
 
-        // Register game services (singleton so games persist across requests)
+        builder.Services.AddSingleton<InputValidator>();
+
         builder.Services.AddSingleton<GameRoomManager>();
         builder.Services.AddSingleton<TradeService>();
+        builder.Services.AddSingleton<LobbyService>();
 
-        // Add logging
+        builder.Services.AddHostedService<GameCleanupService>();
+
         builder.Services.AddLogging(config =>
         {
             config.AddConsole();
@@ -44,23 +54,31 @@ public class Program
         // Map SignalR hub
         app.MapHub<GameHub>("/game-hub");
 
-        // Health check endpoint
-        app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+        app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
+            .WithName("Health");
 
-        // Diagnostics endpoint
-        app.MapGet("/api/games/stats", (GameRoomManager roomManager) =>
-            Results.Ok(roomManager.GetStats())
-        );
+        app.MapGet("/api/stats", (GameRoomManager roomManager) =>
+        {
+            var stats = roomManager.GetStats();
+            return Results.Ok(stats);
+        });
 
         app.MapGet("/api/games", (GameRoomManager roomManager) =>
-            Results.Ok(roomManager.GetAllGames().Select(g => new
-            {
-                gameId = g.GameId,
-                status = g.Status.ToString(),
-                playerCount = g.Players.Count,
-                hostId = g.HostId
-            }))
-        );
+        {
+            var games = roomManager.GetAllGames()
+                .Where(g => g.Status != MonopolyServer.Game.Models.Enums.GameStatus.Finished)
+                .Select(g => new
+                {
+                    gameId = g.GameId,
+                    status = g.Status.ToString(),
+                    playerCount = g.Players.Count,
+                    maxPlayers = GameConstants.MaxPlayers,
+                    createdAt = g.CreatedAt
+                })
+                .ToList();
+
+            return Results.Ok(games);
+        });
 
         app.Run();
     }

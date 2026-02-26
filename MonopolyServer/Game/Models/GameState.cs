@@ -1,4 +1,5 @@
-﻿using MonopolyServer.Game.Models.Enums;
+﻿using MonopolyServer.Game.Constants;
+using MonopolyServer.Game.Models.Enums;
 
 namespace MonopolyServer.Game.Models;
 
@@ -61,9 +62,8 @@ public class GameState
     /// <summary>
     /// Chronological log of game events for audit and replay.
     /// </summary>
-    public List<string> GameLog { get; set; }
+    public List<string> EventLog { get; set; }
 
-    // Transient game state
     /// <summary>
     /// Last dice roll value recorded in the game.
     /// </summary>
@@ -73,16 +73,21 @@ public class GameState
     /// True if the last roll was a double.
     /// </summary>
     public bool DoubleRolled { get; set; }
-    
+
     /// <summary>
     /// List of pending trade offers between players.
     /// </summary>
     public List<TradeOffer> PendingTrades { get; set; } = new();
 
     /// <summary>
-    /// Initialize a new GameState for the given game and host.
+    /// Timestamp when the game was finished (ended or all players bankrupt).
     /// </summary>
-    public GameState(string gameId, string hostId)
+    public DateTime? FinishedAt { get; set; }
+
+    /// <summary>
+    /// Initialize a new GameState for the given game and optional host.
+    /// </summary>
+    public GameState(string gameId, string? hostId)
     {
         GameId = gameId;
         HostId = hostId;
@@ -92,9 +97,10 @@ public class GameState
         CurrentPlayerIndex = 0;
         CreatedAt = DateTime.UtcNow;
         Turn = 0;
-        GameLog = new List<string>();
+        EventLog = new List<string>();
         LastDiceRoll = 0;
         DoubleRolled = false;
+        FinishedAt = null;
     }
 
     /// <summary>
@@ -103,7 +109,9 @@ public class GameState
     public Player? GetCurrentPlayer()
     {
         if (Players.Count == 0 || CurrentPlayerIndex >= Players.Count)
+        {
             return null;
+        }
 
         return Players[CurrentPlayerIndex];
     }
@@ -121,6 +129,6 @@ public class GameState
     /// </summary>
     public void LogAction(string message)
     {
-        GameLog.Add($"[{DateTime.UtcNow:HH:mm:ss}] {message}");
+        EventLog.Add($"[{DateTime.UtcNow:HH:mm:ss}] {message}");
     }
 }

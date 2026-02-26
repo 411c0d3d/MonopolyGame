@@ -6,7 +6,7 @@
 public class PlayerDto
 {
     /// <summary>
-    /// Unique player identifier.
+    /// Unique persistent player identifier (GUID).
     /// </summary>
     public string Id { get; set; } = string.Empty;
 
@@ -39,4 +39,14 @@ public class PlayerDto
     /// Number of kept cards (e.g., Get Out of Jail Free) held by the player.
     /// </summary>
     public int KeptCardCount { get; set; }
+
+    /// <summary>
+    /// Whether the player is currently connected.
+    /// </summary>
+    public bool IsConnected { get; set; }
+
+    /// <summary>
+    /// Timestamp when player disconnected.
+    /// </summary>
+    public DateTime? DisconnectedAt { get; set; }
 }

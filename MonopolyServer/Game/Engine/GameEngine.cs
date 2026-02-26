@@ -44,14 +44,16 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Roll the dice and return the result (sum of 2d6).
+    /// Roll the dice. Tracks consecutive doubles and sends player to jail on the third.
+    /// Returns whether the player was sent to jail so the hub can skip movement.
     /// </summary>
-    public (int Dice1, int Dice2, int Total, bool IsDouble) RollDice()
+    public (int Dice1, int Dice2, int Total, bool IsDouble, bool SentToJail) RollDice()
     {
         int dice1 = _random.Next(1, 7);
         int dice2 = _random.Next(1, 7);
         int total = dice1 + dice2;
         bool isDouble = dice1 == dice2;
+        bool sentToJail = false;
 
         _state.LastDiceRoll = total;
         _state.DoubleRolled = isDouble;
@@ -61,11 +63,30 @@ public class GameEngine
         {
             currentPlayer.LastDiceRoll = total;
             currentPlayer.HasRolledDice = true;
-            _state.LogAction($"{currentPlayer.Name} rolled: {dice1} + {dice2} = {total}" +
-                             (isDouble ? " (Double!)" : ""));
+
+            if (isDouble)
+            {
+                currentPlayer.ConsecutiveDoubles++;
+
+                if (currentPlayer.ConsecutiveDoubles >= 3)
+                {
+                    SendPlayerToJail(currentPlayer);
+                    sentToJail = true;
+                    _state.LogAction($"{currentPlayer.Name} rolled three consecutive doubles and was sent to jail!");
+                }
+                else
+                {
+                    _state.LogAction($"{currentPlayer.Name} rolled: {dice1} + {dice2} = {total} (Double! Roll again)");
+                }
+            }
+            else
+            {
+                currentPlayer.ConsecutiveDoubles = 0;
+                _state.LogAction($"{currentPlayer.Name} rolled: {dice1} + {dice2} = {total}");
+            }
         }
 
-        return (dice1, dice2, total, isDouble);
+        return (dice1, dice2, total, isDouble, sentToJail);
     }
 
     /// <summary>
@@ -75,15 +96,17 @@ public class GameEngine
     {
         var player = _state.GetCurrentPlayer();
         if (player == null)
-            return;
-
-        int newPosition = player.Position + diceTotal;
-
-        // Passing or landing on Go
-        if (newPosition >= 40)
         {
-            player.AddCash(200);
-            newPosition = newPosition % 40;
+            return;
+        }
+
+        // Ensure result is always positive even with negative diceTotal
+        int newPosition = (player.Position + diceTotal + 40) % 40;
+
+        // Passing or landing on Go (only for forward movement)
+        if (diceTotal > 0 && newPosition < player.Position)
+        {
+            player.AddCash(Constants.GameConstants.GoPassingBonus);
             _state.LogAction($"{player.Name} passed Go and collected $200.");
         }
 
@@ -142,7 +165,7 @@ public class GameEngine
 
     /// <summary>
     /// Handle landing on a property (street, railroad, utility).
-    /// If owned, pay rent. If unowned, offer to buy.
+    /// If owned by another player, collect rent and attribute any bankruptcy to that creditor.
     /// </summary>
     private void HandlePropertyLanding(Player player, Property property)
     {
@@ -183,6 +206,9 @@ public class GameEngine
         };
     }
 
+    /// <summary>
+    /// Compute rent for a street property: base, monopoly-doubled, or by house/hotel level.
+    /// </summary>
     private int CalculateStreetRent(Property property)
     {
         if (property.RentValues.Length == 0)
@@ -192,53 +218,46 @@ public class GameEngine
             return property.RentValues[5];
 
         if (property.HouseCount > 0)
-        {
-            // Check if owner has full color group (monopoly)
-            var colorGroup = _state.Board.GetPropertiesByColorGroup(property.ColorGroup!);
-            bool hasMonopoly = colorGroup.All(p => p.OwnerId == property.OwnerId);
-
-            // Double rent for unimproved street in monopoly
-            if (property.HouseCount == 0 && hasMonopoly)
-                return property.RentValues[0] * 2;
-
             return property.RentValues[property.HouseCount];
-        }
 
-        // No houses/hotels—return base rent
-        var baseColorGroup = _state.Board.GetPropertiesByColorGroup(property.ColorGroup!);
-        bool baseHasMonopoly = baseColorGroup.All(p => p.OwnerId == property.OwnerId);
-        return baseHasMonopoly ? property.RentValues[0] * 2 : property.RentValues[0];
+        var colorGroup = _state.Board.GetPropertiesByColorGroup(property.ColorGroup!);
+        bool hasMonopoly = colorGroup.All(p => p.OwnerId == property.OwnerId);
+        return hasMonopoly ? property.RentValues[0] * 2 : property.RentValues[0];
     }
 
+    /// <summary>
+    /// Compute rent for a railroad: 25/50/100/200 based on number owned.
+    /// </summary>
     private int CalculateRailroadRent(Property property)
     {
         var owner = _state.GetPlayerById(property.OwnerId!);
         if (owner == null)
             return 0;
 
-        int railroadsOwned = _state.Board.Spaces
-            .Where(p => p.Type == PropertyType.Railroad && p.OwnerId == owner.Id && !p.IsMortgaged)
-            .Count();
+        int railroadsOwned = _state.Board.Spaces.Count(p =>
+            p.Type == PropertyType.Railroad && p.OwnerId == owner.Id && !p.IsMortgaged);
 
-        return 25 * railroadsOwned;
+        return 25 * (int)Math.Pow(2, railroadsOwned - 1);
     }
 
+    /// <summary>
+    /// Compute rent for a utility: 4x or 10x dice roll based on number owned.
+    /// </summary>
     private int CalculateUtilityRent(Property property, int diceRoll)
     {
         var owner = _state.GetPlayerById(property.OwnerId!);
         if (owner == null)
             return 0;
 
-        int utilitiesOwned = _state.Board.Spaces
-            .Where(p => p.Type == PropertyType.Utility && p.OwnerId == owner.Id && !p.IsMortgaged)
-            .Count();
+        int utilitiesOwned = _state.Board.Spaces.Count(p =>
+            p.Type == PropertyType.Utility && p.OwnerId == owner.Id && !p.IsMortgaged);
 
         return diceRoll * (utilitiesOwned == 1 ? 4 : 10);
     }
 
     /// <summary>
-    /// Collect rent from one player and give to another.
-    /// If payer can't afford it, they go bankrupt.
+    /// Collect rent from payer to owner. If payer cannot cover rent, all remaining cash
+    /// goes to the owner and the payer is bankrupted with the owner as creditor.
     /// </summary>
     private void CollectRent(Player payer, Player owner, int amount, string propertyName)
     {
@@ -254,21 +273,20 @@ public class GameEngine
         else
         {
             // Payer goes bankrupt
-            int cashOwed = amount;
             int cashAvailable = payer.Cash;
             payer.DeductCash(cashAvailable);
             owner.AddCash(cashAvailable);
-            _state.LogAction($"{payer.Name} owed ${cashOwed} but only had ${cashAvailable}. {payer.Name} is bankrupt!");
-            BankruptPlayer(payer);
+            _state.LogAction($"{payer.Name} owed ${amount} but only had ${cashAvailable}. {payer.Name} is bankrupt!");
+            BankruptPlayer(payer, creditor: owner);
         }
     }
 
     /// <summary>
-    /// Handle income tax or luxury tax.
+    /// Handle income tax or luxury tax. Insufficient funds bankrupts to the bank (no creditor).
     /// </summary>
     private void HandleTax(Player player, Property space)
     {
-        int taxAmount = space.Name.Contains("Income") ? 200 : 100; // Luxury tax is $100, Income tax is $200
+        int taxAmount = space.Name.Contains("Income") ? 200 : 100;
         if (player.DeductCash(taxAmount))
         {
             _state.LogAction($"{player.Name} paid ${taxAmount} in taxes.");
@@ -278,7 +296,7 @@ public class GameEngine
             int available = player.Cash;
             player.DeductCash(available);
             _state.LogAction($"{player.Name} couldn't afford ${taxAmount} in taxes. {player.Name} is bankrupt!");
-            BankruptPlayer(player);
+            BankruptPlayer(player, creditor: null);
         }
     }
 
@@ -292,7 +310,7 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Attempt to release player from jail (after 3 turns, or if they roll doubles, or pay to leave).
+    /// Attempt to release player from jail by rolling doubles, exhausting turns, or paying $50 bail.
     /// </summary>
     public bool ReleaseFromJail(Player player, bool payToBail = false)
     {
@@ -324,24 +342,62 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Mark a player as bankrupt. Their properties become unowned.
+    /// Pay $50 bail to leave jail immediately before rolling. Returns false if player cannot afford it.
     /// </summary>
-    public void BankruptPlayer(Player player)
+    public bool PayBailToLeaveJail(Player player)
     {
-        player.Bankrupt();
+        return ReleaseFromJail(player, payToBail: true);
+    }
 
-        // Unown their properties
-        foreach (var property in _state.Board.Spaces.Where(p => p.OwnerId == player.Id))
+    /// <summary>
+    /// Mark a player as bankrupt. If a creditor is provided (rent bankruptcy), all properties,
+    /// remaining cash, and kept cards transfer to that creditor. Otherwise (tax, card-triggered),
+    /// properties return to market and kept cards return to their decks.
+    /// </summary>
+    public void BankruptPlayer(Player player, Player? creditor)
+    {
+        var properties = _state.Board.Spaces.Where(p => p.OwnerId == player.Id).ToList();
+
+        if (creditor != null)
         {
-            property.OwnerId = null;
-            property.IsMortgaged = false;
-            property.HouseCount = 0;
-            property.HasHotel = false;
+            creditor.AddCash(player.Cash);
+
+            foreach (var property in properties)
+            {
+                property.OwnerId = creditor.Id;
+                property.IsMortgaged = false;
+                property.HouseCount = 0;
+                property.HasHotel = false;
+            }
+
+            foreach (var card in player.KeptCards)
+            {
+                creditor.KeptCards.Add(card);
+            }
+
+            _state.LogAction($"{player.Name} is bankrupt. All assets transferred to {creditor.Name}.");
+        }
+        else
+        {
+            foreach (var property in properties)
+            {
+                property.OwnerId = null;
+                property.IsMortgaged = false;
+                property.HouseCount = 0;
+                property.HasHotel = false;
+            }
+
+            foreach (var card in player.KeptCards)
+            {
+                _cardDeckManager.ReturnCardToBottom(card);
+            }
+
+            _state.LogAction($"{player.Name} is bankrupt. All assets returned to the bank.");
         }
 
-        _state.LogAction($"{player.Name} is bankrupt and out of the game.");
+        player.KeptCards.Clear();
+        player.Bankrupt();
 
-        // Check win condition
         var activePlayers = _state.Players.Where(p => !p.IsBankrupt).ToList();
         if (activePlayers.Count == 1)
         {
@@ -352,7 +408,7 @@ public class GameEngine
     /// <summary>
     /// End the game with a winner.
     /// </summary>
-    public void EndGame(Player winner)
+    private void EndGame(Player winner)
     {
         _state.Status = GameStatus.Finished;
         _state.EndedAt = DateTime.UtcNow;
@@ -360,7 +416,7 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Advance to the next player's turn.
+    /// Advance to the next player's turn. Resets per-turn state including consecutive doubles.
     /// </summary>
     public void NextTurn()
     {
@@ -369,6 +425,7 @@ public class GameEngine
         {
             currentPlayer.IsCurrentPlayer = false;
             currentPlayer.HasRolledDice = false;
+            currentPlayer.ConsecutiveDoubles = 0;
         }
 
         // Skip bankrupt players
@@ -410,12 +467,25 @@ public class GameEngine
     }
 
     /// <summary>
+    /// Decline to purchase the property the current player is standing on. Property remains unowned.
+    /// </summary>
+    public bool DeclineProperty(Property property)
+    {
+        var player = _state.GetCurrentPlayer();
+        if (player == null || property.OwnerId != null)
+            return false;
+
+        _state.LogAction($"{player.Name} declined to buy {property.Name}.");
+        return true;
+    }
+
+    /// <summary>
     /// Build a house on a property (requires monopoly and sufficient cash).
     /// </summary>
     public bool BuildHouse(Property property)
     {
         var owner = _state.GetPlayerById(property.OwnerId!);
-        if (owner == null || property.HouseCount >= 4)
+        if (owner == null || property.HouseCount >= 4 || property.HasHotel)
             return false;
 
         // Check monopoly
@@ -439,7 +509,7 @@ public class GameEngine
     public bool BuildHotel(Property property)
     {
         var owner = _state.GetPlayerById(property.OwnerId!);
-        if (owner == null || property.HouseCount < 4)
+        if (owner == null || property.HouseCount < 4 || property.HasHotel)
             return false;
 
         if (owner.DeductCash(property.HotelCost))
@@ -451,6 +521,40 @@ public class GameEngine
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Sell one house from a property back to the bank for half the house cost.
+    /// </summary>
+    public bool SellHouse(Property property)
+    {
+        var owner = _state.GetPlayerById(property.OwnerId!);
+        if (owner == null || property.HouseCount <= 0 || property.HasHotel)
+            return false;
+
+        int refund = property.HouseCost / 2;
+        property.HouseCount--;
+        owner.AddCash(refund);
+        _state.LogAction($"{owner.Name} sold a house on {property.Name} for ${refund}.");
+        return true;
+    }
+
+    /// <summary>
+    /// Sell a hotel from a property back to the bank for half the hotel cost.
+    /// Hotel is removed and the property returns to zero houses.
+    /// </summary>
+    public bool SellHotel(Property property)
+    {
+        var owner = _state.GetPlayerById(property.OwnerId!);
+        if (owner == null || !property.HasHotel)
+            return false;
+
+        int refund = property.HotelCost / 2;
+        property.HasHotel = false;
+        property.HouseCount = 0;
+        owner.AddCash(refund);
+        _state.LogAction($"{owner.Name} sold a hotel on {property.Name} for ${refund}.");
+        return true;
     }
 
     /// <summary>
@@ -469,7 +573,7 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Unmortgage a property (player pays half the purchase price).
+    /// Unmortgage a property. Player pays mortgage value plus 10% interest.
     /// </summary>
     public bool UnmortgageProperty(Property property)
     {
@@ -477,7 +581,7 @@ public class GameEngine
         if (owner == null || !property.IsMortgaged)
             return false;
 
-        int cost = (int)(property.PurchasePrice * 0.5);
+        int cost = (int)(property.MortgageValue * 1.1);
         if (owner.DeductCash(cost))
         {
             property.IsMortgaged = false;
@@ -518,7 +622,7 @@ public class GameEngine
         {
             case CardType.MoveToGo:
                 player.Position = 0;
-                player.AddCash(200);
+                player.AddCash(Constants.GameConstants.GoPassingBonus);
                 _state.LogAction($"{player.Name} moved to Go and collected $200.");
                 break;
 
@@ -534,10 +638,16 @@ public class GameEngine
             case CardType.MoveToSpecificLocation:
                 if (card.TargetPosition.HasValue)
                 {
-                    int oldPos = player.Position;
-                    MovePlayer(card.TargetPosition.Value - oldPos);
-                    _state.LogAction(
-                        $"{player.Name} moved to {_state.Board.GetProperty(card.TargetPosition.Value).Name}.");
+                    int target = card.TargetPosition.Value;
+                    if (target < player.Position)
+                    {
+                        player.AddCash(Constants.GameConstants.GoPassingBonus);
+                        _state.LogAction($"{player.Name} passed Go and collected $200.");
+                    }
+
+                    player.Position = target;
+                    _state.LogAction($"{player.Name} moved to {_state.Board.GetProperty(target).Name}.");
+                    HandleLandingOnSpace(player, target);
                 }
 
                 break;
@@ -586,7 +696,7 @@ public class GameEngine
                     else
                     {
                         _state.LogAction($"{player.Name} couldn't afford ${card.Amount.Value}. Bankrupt!");
-                        BankruptPlayer(player);
+                        BankruptPlayer(player, creditor: null);
                     }
                 }
 
@@ -637,7 +747,7 @@ public class GameEngine
             int[] utilities = { 12, 28 };
             targetPos = utilities.FirstOrDefault(u => u > currentPos);
             if (targetPos == 0)
-                targetPos = utilities[0]; // Wrap around
+                targetPos = utilities[0];
         }
         else if (description.Contains("Railroad"))
         {
@@ -645,7 +755,7 @@ public class GameEngine
             int[] railroads = { 5, 15, 25, 35 };
             targetPos = railroads.FirstOrDefault(r => r > currentPos);
             if (targetPos == 0)
-                targetPos = railroads[0]; // Wrap around
+                targetPos = railroads[0];
         }
 
         if (targetPos > currentPos)
@@ -655,17 +765,17 @@ public class GameEngine
         else if (targetPos > 0)
         {
             // Wrapped around, pass Go
-            player.AddCash(200);
+            player.AddCash(Constants.GameConstants.GoPassingBonus);
             MovePlayer((40 - currentPos) + targetPos);
         }
     }
 
     /// <summary>
-    /// Player pays each other player a set amount.
+    /// Player pays each other player a set amount. Bankruptcy is to the bank (no single creditor).
     /// </summary>
     private void PayEachPlayer(Player payer, int amount)
     {
-        int totalOwed = amount * (_state.Players.Count - 1);
+        int totalOwed = amount * (_state.Players.Count(p => !p.IsBankrupt) - 1);
 
         if (payer.Cash >= totalOwed)
         {
@@ -682,16 +792,17 @@ public class GameEngine
             int available = payer.Cash;
             payer.DeductCash(available);
             _state.LogAction($"{payer.Name} couldn't afford to pay each player. {payer.Name} is bankrupt!");
-            BankruptPlayer(payer);
+            BankruptPlayer(payer, creditor: null);
         }
     }
 
     /// <summary>
     /// Player collects a set amount from each other player.
+    /// Players who cannot pay are bankrupted with the collector as creditor.
     /// </summary>
     private void CollectFromEachPlayer(Player collector, int amount)
     {
-        foreach (var otherPlayer in _state.Players.Where(p => p.Id != collector.Id && !p.IsBankrupt))
+        foreach (var otherPlayer in _state.Players.Where(p => p.Id != collector.Id && !p.IsBankrupt).ToList())
         {
             if (otherPlayer.DeductCash(amount))
             {
@@ -704,7 +815,7 @@ public class GameEngine
                 otherPlayer.DeductCash(available);
                 collector.AddCash(available);
                 _state.LogAction($"{otherPlayer.Name} couldn't pay {collector.Name} and is bankrupt!");
-                BankruptPlayer(otherPlayer);
+                BankruptPlayer(otherPlayer, creditor: collector);
             }
         }
 
@@ -712,7 +823,7 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Player pays for repairs on their houses and hotels.
+    /// Player pays for repairs on their houses and hotels. Bankruptcy goes to the bank.
     /// </summary>
     private void PayForRepairs(Player player, int houseCost, int hotelCost)
     {
@@ -721,14 +832,7 @@ public class GameEngine
 
         foreach (var property in ownedProperties)
         {
-            if (property.HasHotel)
-            {
-                totalCost += hotelCost;
-            }
-            else
-            {
-                totalCost += property.HouseCount * houseCost;
-            }
+            totalCost += property.HasHotel ? hotelCost : property.HouseCount * houseCost;
         }
 
         if (totalCost == 0)
@@ -745,7 +849,7 @@ public class GameEngine
         else
         {
             _state.LogAction($"{player.Name} couldn't afford ${totalCost} in repairs. {player.Name} is bankrupt!");
-            BankruptPlayer(player);
+            BankruptPlayer(player, creditor: null);
         }
     }
 
@@ -898,7 +1002,18 @@ public class GameEngine
     /// </summary>
     private void ExecuteTrade(Player fromPlayer, Player toPlayer, TradeOffer trade)
     {
-        // Transfer cash
+        if (!ValidateTradeAssets(fromPlayer, trade.OfferedPropertyIds, trade.OfferedCash, trade.OfferedCardIds))
+        {
+            _state.LogAction($"Trade failed: {fromPlayer.Name} no longer has the offered assets");
+            return;
+        }
+
+        if (!ValidateTradeAssets(toPlayer, trade.RequestedPropertyIds, trade.RequestedCash, trade.RequestedCardIds))
+        {
+            _state.LogAction($"Trade failed: {toPlayer.Name} no longer has the requested assets");
+            return;
+        }
+
         if (trade.OfferedCash > 0)
         {
             fromPlayer.DeductCash(trade.OfferedCash);
@@ -911,7 +1026,6 @@ public class GameEngine
             fromPlayer.AddCash(trade.RequestedCash);
         }
 
-        // Transfer properties offered
         foreach (var propertyId in trade.OfferedPropertyIds)
         {
             var property = _state.Board.GetProperty(propertyId);
@@ -921,7 +1035,6 @@ public class GameEngine
             }
         }
 
-        // Transfer properties requested
         foreach (var propertyId in trade.RequestedPropertyIds)
         {
             var property = _state.Board.GetProperty(propertyId);
@@ -931,7 +1044,6 @@ public class GameEngine
             }
         }
 
-        // Transfer Get Out of Jail Free cards offered
         foreach (var cardId in trade.OfferedCardIds)
         {
             var card = fromPlayer.KeptCards.FirstOrDefault(c => c.Id == cardId);
@@ -942,7 +1054,6 @@ public class GameEngine
             }
         }
 
-        // Transfer Get Out of Jail Free cards requested
         foreach (var cardId in trade.RequestedCardIds)
         {
             var card = toPlayer.KeptCards.FirstOrDefault(c => c.Id == cardId);
@@ -982,5 +1093,15 @@ public class GameEngine
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Toggles the mortgage status of a property.
+    /// </summary>
+    public bool ToggleMortgage(int propertyId)
+    {
+        var property = _state.Board.GetProperty(propertyId);
+
+        return property.IsMortgaged ? UnmortgageProperty(property) : MortgageProperty(property);
     }
 }

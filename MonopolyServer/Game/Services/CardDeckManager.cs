@@ -16,7 +16,7 @@ public class CardDeckManager
     private Random _random;
 
     /// <summary>
-    /// 
+    /// Constructor initializes the card decks and shuffles them.
     /// </summary>
     public CardDeckManager()
     {

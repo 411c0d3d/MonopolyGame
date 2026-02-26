@@ -6,9 +6,24 @@
 public class Player
 {
     /// <summary>
-    /// Unique identifier for the player.
+    /// Unique persistent identifier for the player (GUID).
     /// </summary>
     public string Id { get; set; }
+
+    /// <summary>
+    /// Current SignalR connection ID. Null when disconnected.
+    /// </summary>
+    public string? ConnectionId { get; set; }
+
+    /// <summary>
+    /// Whether the player is currently connected to the hub.
+    /// </summary>
+    public bool IsConnected { get; set; }
+
+    /// <summary>
+    /// Timestamp when player disconnected for timeout cleanup.
+    /// </summary>
+    public DateTime? DisconnectedAt { get; set; }
 
     /// <summary>
     /// Display name of the player.
@@ -23,7 +38,7 @@ public class Player
     /// <summary>
     /// Current board position (0-39).
     /// </summary>
-    public int Position { get; set; } // 0-39 on board
+    public int Position { get; set; }
 
     /// <summary>
     /// Indicates whether the player is currently in jail.
@@ -31,14 +46,14 @@ public class Player
     public bool IsInJail { get; set; }
 
     /// <summary>
-    /// Number of turns remaining in jail before the player is released or must take further action.
+    /// Number of turns remaining in jail before action is required.
     /// </summary>
     public int JailTurnsRemaining { get; set; }
 
     /// <summary>
-    /// Collection of cards held by the player (for example, "Get Out of Jail Free" cards).
+    /// Collection of cards held by the player.
     /// </summary>
-    public List<Card> KeptCards { get; set; } // Cards held by player (Get Out of Jail Free)
+    public List<Card> KeptCards { get; set; }
 
     /// <summary>
     /// Indicates whether the player has gone bankrupt.
@@ -50,7 +65,6 @@ public class Player
     /// </summary>
     public DateTime JoinedAt { get; set; }
 
-    // Game state
     /// <summary>
     /// True when it is this player's turn.
     /// </summary>
@@ -67,7 +81,12 @@ public class Player
     public int LastDiceRoll { get; set; }
 
     /// <summary>
-    /// Initializes a new Player with the specified id, name, and optional starting cash.
+    /// Number of consecutive doubles rolled by the player.
+    /// </summary>
+    public int ConsecutiveDoubles { get; set; }
+
+    /// <summary>
+    /// Initializes a new Player with persistent identity and connection state.
     /// </summary>
     /// <param name="id">Unique player identifier.</param>
     /// <param name="name">Player display name.</param>
@@ -77,7 +96,7 @@ public class Player
         Id = id;
         Name = name;
         Cash = startingCash;
-        Position = 0; // Start at Go
+        Position = 0;
         IsInJail = false;
         JailTurnsRemaining = 0;
         KeptCards = new List<Card>();
@@ -86,23 +105,28 @@ public class Player
         IsCurrentPlayer = false;
         HasRolledDice = false;
         LastDiceRoll = 0;
+        ConsecutiveDoubles = 0;
+        ConnectionId = null;
+        IsConnected = false;
+        DisconnectedAt = null;
     }
 
     /// <summary>
-    /// Move the player to a new board position. Awards $200 when passing GO.
+    /// Move the player to a new board position and handle passing GO.
     /// </summary>
     /// <param name="newPosition">Target board position (may exceed 39 to indicate passing GO).</param>
     public void MoveTo(int newPosition)
     {
+        int normalizedPosition = ((newPosition % 40) + 40) % 40;
+
         if (newPosition >= 40)
         {
-            // Passed Go, collect $200
             Cash += 200;
-            Position = newPosition % 40;
+            Position = normalizedPosition;
         }
         else
         {
-            Position = newPosition;
+            Position = normalizedPosition;
         }
     }
 
@@ -138,7 +162,7 @@ public class Player
     {
         IsInJail = true;
         JailTurnsRemaining = 3;
-        Position = 10; // Jail position
+        Position = 10;
     }
 
     /// <summary>

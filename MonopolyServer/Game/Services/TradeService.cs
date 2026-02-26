@@ -12,6 +12,11 @@ public class TradeService
     private readonly GameRoomManager _roomManager;
     private readonly ILogger<TradeService> _logger;
 
+    /// <summary>
+    /// Constructor with dependency injection of GameRoomManager for accessing game state and ILogger for logging trade actions.
+    /// </summary>
+    /// <param name="roomManager"></param>
+    /// <param name="logger"></param>
     public TradeService(GameRoomManager roomManager, ILogger<TradeService> logger)
     {
         _roomManager = roomManager;

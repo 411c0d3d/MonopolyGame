@@ -43,5 +43,10 @@ public class GameStateDto
     /// <summary>
     /// Chronological log of recent game events.
     /// </summary>
-    public List<string> GameLog { get; set; } = new();
+    public List<string> EventLog { get; set; } = new();
+
+    /// <summary>
+    /// Timestamp when the game was finished, null if still active.
+    /// </summary>
+    public DateTime? FinishedAt { get; set; }
 }
