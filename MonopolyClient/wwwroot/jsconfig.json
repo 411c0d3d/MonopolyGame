@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "checkJs": false,
+    "jsx": "react",
+    "target": "ES6",
+    "lib": [
+      "ES6",
+      "DOM"
+    ],
+    "noEmit": true,
+    "allowJs": true,
+    "moduleResolution": "node"
+  },
+  "include": [
+    "utils/*.js",
+    "components/*.js",
+    "pages/*.js",
+    "globals.js"
+  ]
+}

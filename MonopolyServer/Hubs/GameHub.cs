@@ -479,6 +479,7 @@ public class GameHub : Hub
     private GameStateDto SerializeGameState(GameState game) => new()
     {
         GameId = game.GameId,
+        HostId = game.HostId,
         Status = game.Status.ToString(),
         Turn = game.Turn,
         CurrentPlayerIndex = game.CurrentPlayerIndex,
@@ -488,13 +489,29 @@ public class GameHub : Hub
         {
             Id = s.Id,
             Name = s.Name,
+            Type = s.Type.ToString(),
+            ColorGroup = s.ColorGroup,
             OwnerId = s.OwnerId,
             OwnerName = s.OwnerId != null ? game.GetPlayerById(s.OwnerId)?.Name : null,
+            PurchasePrice = s.PurchasePrice,
+            MortgageValue = s.MortgageValue,
+            HouseCost = s.HouseCost,
+            HotelCost = s.HotelCost,
+            RentValues = s.RentValues,
             HouseCount = s.HouseCount,
             HasHotel = s.HasHotel,
             IsMortgaged = s.IsMortgaged
         }).ToList(),
-        EventLog = game.EventLog.TakeLast(10).ToList()
+        EventLog = game.EventLog.TakeLast(10).ToList(),
+        CurrentTurnStartedAt = game.CurrentTurnStartedAt,
+        FinishedAt = game.FinishedAt,
+        CreatedAt = game.CreatedAt,
+        StartedAt = game.StartedAt,
+        EndedAt = game.EndedAt,
+        LastDiceRoll = game.LastDiceRoll,
+        DoubleRolled = game.DoubleRolled,
+        PendingTrades = game.PendingTrades,
+        WinnerId = game.WinnerId
     };
 
     /// <summary>
@@ -507,10 +524,16 @@ public class GameHub : Hub
         Cash = p.Cash,
         Position = p.Position,
         IsInJail = p.IsInJail,
+        JailTurnsRemaining = p.JailTurnsRemaining,
         IsBankrupt = p.IsBankrupt,
         KeptCardCount = p.KeptCards.Count,
         IsConnected = p.IsConnected,
-        DisconnectedAt = p.DisconnectedAt
+        DisconnectedAt = p.DisconnectedAt,
+        JoinedAt = p.JoinedAt,
+        IsCurrentPlayer = p.IsCurrentPlayer,
+        HasRolledDice = p.HasRolledDice,
+        LastDiceRoll = p.LastDiceRoll,
+        ConsecutiveDoubles = p.ConsecutiveDoubles
     };
 
     /// <summary>

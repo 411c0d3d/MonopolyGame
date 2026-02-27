@@ -1,7 +1,6 @@
 ﻿using Microsoft.AspNetCore.SignalR;
-using MonopolyServer.DTOs;
-using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Game.Services;
+using MonopolyServer.Game.Models.Enums;
 
 namespace MonopolyServer.Hubs;
 
@@ -15,6 +14,12 @@ public class AdminHub : Hub
     private readonly ILogger<AdminHub> _logger;
     private readonly IConfiguration _configuration;
 
+    /// <summary>
+    /// Constructor with dependency injection for game room management, logging, and configuration access.
+    /// </summary>
+    /// <param name="roomManager"></param>
+    /// <param name="logger"></param>
+    /// <param name="configuration"></param>
     public AdminHub(
         GameRoomManager roomManager,
         ILogger<AdminHub> logger,

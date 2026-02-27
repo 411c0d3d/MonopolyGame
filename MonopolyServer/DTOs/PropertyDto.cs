@@ -54,4 +54,29 @@ public class PropertyDto
     /// Color group name for street properties, if applicable.
     /// </summary>
     public string? ColorGroup { get; set; }
+
+    /// <summary>
+    /// Purchase price of the property.
+    /// </summary>
+    public int PurchasePrice { get; set; }
+
+    /// <summary>
+    /// Mortgage value of the property.
+    /// </summary>
+    public int MortgageValue { get; set; }
+
+    /// <summary>
+    /// Cost to buy a house on this property.
+    /// </summary>
+    public int HouseCost { get; set; }
+
+    /// <summary>
+    /// Cost to buy a hotel on this property.
+    /// </summary>
+    public int HotelCost { get; set; }
+
+    /// <summary>
+    /// Rent values indexed by development: [base, 1house, 2house, 3house, 4house, hotel].
+    /// </summary>
+    public int[] RentValues { get; set; } = Array.Empty<int>();
 }

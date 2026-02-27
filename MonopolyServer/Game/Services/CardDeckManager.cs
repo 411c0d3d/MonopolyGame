@@ -23,7 +23,8 @@ public class CardDeckManager
         _random = new Random();
         _allChanceCards = InitializeChanceCards();
         _allCommunityChestCards = InitializeCommunityChestCards();
-        ShuffleDecks();
+        _chanceCards = new Queue<Card>(Shuffle(_allChanceCards));
+        _communityChestCards = new Queue<Card>(Shuffle(_allCommunityChestCards));
     }
 
     /// <summary>
@@ -225,15 +226,6 @@ public class CardDeckManager
         };
 
         return cards;
-    }
-
-    /// <summary>
-    /// Shuffle both decks at game start.
-    /// </summary>
-    public void ShuffleDecks()
-    {
-        _chanceCards = new Queue<Card>(Shuffle(_allChanceCards));
-        _communityChestCards = new Queue<Card>(Shuffle(_allCommunityChestCards));
     }
 
     /// <summary>
