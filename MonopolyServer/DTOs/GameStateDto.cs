@@ -44,6 +44,11 @@ public class GameStateDto
     /// Chronological log of recent game events.
     /// </summary>
     public List<string> EventLog { get; set; } = new();
+    
+    /// <summary>
+    /// UTC timestamp when the current turn started, used for turn timeouts.
+    /// </summary>
+    public DateTime? CurrentTurnStartedAt { get; set; }
 
     /// <summary>
     /// Timestamp when the game was finished, null if still active.

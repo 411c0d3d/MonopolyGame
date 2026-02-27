@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Monopoly Online</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.5/signalr.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&display=swap');
+        :root {
+            --ink:#0f0e0c; --paper:#f5f0e8; --cream:#ede8db; --gold:#c9a84c;
+            --gold-light:#e8cc7a; --green:#2d6a4f; --green-light:#40916c;
+            --red:#c1121f; --blue:#1d4e89; --border:#c8bfa8; --shadow:rgba(15,14,12,0.12);
+        }
+        *{box-sizing:border-box;margin:0;padding:0;}
+        body{font-family:'DM Sans',sans-serif;background:var(--paper);color:var(--ink);min-height:100vh;}
+        h1,h2,h3{font-family:'Playfair Display',serif;}
+        .page-enter{animation:fadeUp .3s ease forwards;}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+        .center{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;}
+        /* Header */
+        .header{border-bottom:2px solid var(--ink);padding:0 24px;height:56px;display:flex;align-items:center;gap:10px;
+            background:var(--paper);position:sticky;top:0;z-index:100;}
+        .logo-icon{width:27px;height:27px;background:var(--ink);color:var(--gold);display:flex;align-items:center;
+            justify-content:center;font-size:13px;border-radius:4px;}
+        .logo-text{font-family:'Playfair Display',serif;font-size:18px;font-weight:900;}
+        .header-right{margin-left:auto;display:flex;align-items:center;gap:8px;}
+        .hbadge{background:var(--ink);color:var(--gold);font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;}
+        /* Buttons */
+        .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 18px;border-radius:8px;
+            font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid transparent;transition:all .14s;}
+        .btn:disabled{opacity:.38;cursor:not-allowed;}
+        .btn-ink{background:var(--ink);color:var(--gold);} .btn-ink:hover:not(:disabled){background:#252420;}
+        .btn-gold{background:var(--gold);color:var(--ink);} .btn-gold:hover:not(:disabled){background:var(--gold-light);}
+        .btn-green{background:var(--green);color:#fff;} .btn-green:hover:not(:disabled){background:var(--green-light);}
+        .btn-red{background:var(--red);color:#fff;} .btn-red:hover:not(:disabled){background:#c62828;}
+        .btn-ghost{background:transparent;color:var(--ink);border-color:var(--border);}
+        .btn-ghost:hover:not(:disabled){border-color:var(--ink);background:var(--cream);}
+        .btn-warn{background:#fbbf24;color:var(--ink);border-color:#fbbf24;}
+        .btn-sm{padding:5px 11px;font-size:12px;} .btn-lg{padding:12px 24px;font-size:15px;} .btn-full{width:100%;}
+        /* Inputs */
+        .ig{display:flex;flex-direction:column;gap:5px;margin-bottom:13px;}
+        .il{font-size:11px;font-weight:700;color:#777;text-transform:uppercase;letter-spacing:.5px;}
+        .input{padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-family:'DM Sans',sans-serif;
+            font-size:14px;background:#fff;outline:none;transition:border-color .13s;}
+        .input:focus{border-color:var(--ink);} .input::placeholder{color:#ccc;}
+        /* Card */
+        .card{background:#fff;border:1.5px solid var(--border);border-radius:12px;padding:22px;box-shadow:0 2px 10px var(--shadow);}
+        /* Badges */
+        .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;}
+        .bg-green{background:#d8f3dc;color:var(--green);} .bg-yellow{background:#fff3cd;color:#856404;}
+        .bg-red{background:#fde8e8;color:var(--red);} .bg-blue{background:#dbeafe;color:var(--blue);}
+        .bg-gray{background:var(--cream);color:#777;} .bg-purple{background:#ede9fe;color:#6b3fa0;}
+        /* Section label */
+        .slabel{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#aaa;margin-bottom:7px;}
+        /* Divider */
+        .div{display:flex;align-items:center;gap:9px;color:#ccc;font-size:10px;margin:13px 0;}
+        .div::before,.div::after{content:'';flex:1;height:1px;background:var(--border);}
+        /* Toast */
+        .tray{position:fixed;bottom:18px;right:18px;display:flex;flex-direction:column;gap:7px;z-index:1000;}
+        .toast{display:flex;align-items:center;gap:9px;padding:11px 15px;border-radius:9px;background:var(--ink);
+            color:#fff;font-size:13px;font-weight:500;box-shadow:0 4px 18px rgba(0,0,0,.22);animation:tin .22s ease;max-width:300px;}
+        .toast-error{background:var(--red);} .toast-success{background:var(--green);}
+        @keyframes tin{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:translateX(0)}}
+        /* Modal */
+        .overlay{position:fixed;inset:0;background:rgba(0,0,0,.52);backdrop-filter:blur(3px);
+            display:flex;align-items:center;justify-content:center;z-index:500;animation:fadein .18s;}
+        @keyframes fadein{from{opacity:0}to{opacity:1}}
+        .mbox{background:#fff;border:2px solid var(--ink);border-radius:13px;padding:26px;
+            max-width:440px;width:calc(100% - 28px);box-shadow:5px 5px 0 var(--ink);animation:min .2s ease;}
+        .mbox-wide{max-width:600px;}
+        @keyframes min{from{opacity:0;transform:translateY(-14px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+        /* Spinner */
+        .spin{width:17px;height:17px;border:2px solid var(--border);border-top-color:var(--ink);border-radius:50%;animation:sp .65s linear infinite;}
+        @keyframes sp{to{transform:rotate(360deg)}}
+        .cover{position:fixed;inset:0;background:var(--paper);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:13px;z-index:900;}
+        /* Home */
+        .big-icon{width:66px;height:66px;background:var(--ink);color:var(--gold);border-radius:13px;display:flex;align-items:center;
+            justify-content:center;font-size:30px;margin:0 auto 16px;box-shadow:0 6px 22px rgba(0,0,0,.2);}
+        .htitle{font-size:clamp(30px,5vw,52px);font-weight:900;line-height:1.1;letter-spacing:-1px;text-align:center;}
+        .htitle span{color:var(--gold);}
+        /* Browser */
+        .gbrowser{display:flex;flex-direction:column;gap:7px;max-height:270px;overflow-y:auto;margin-bottom:10px;}
+        .grow{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1.5px solid var(--border);
+            border-radius:10px;background:#fff;cursor:pointer;transition:border-color .13s,box-shadow .13s;}
+        .grow:hover{border-color:var(--ink);box-shadow:0 2px 7px var(--shadow);}
+        /* Lobby */
+        .lobby-grid{display:grid;grid-template-columns:1fr 290px;gap:18px;padding:26px;max-width:940px;margin:0 auto;}
+        @media(max-width:680px){.lobby-grid{grid-template-columns:1fr;padding:13px;}}
+        .plist{display:flex;flex-direction:column;gap:7px;}
+        .pitem{display:flex;align-items:center;gap:10px;padding:10px 13px;border:1.5px solid var(--border);border-radius:10px;background:#fff;}
+        .pav{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;}
+        .gid-box{background:var(--cream);border:1.5px dashed var(--border);border-radius:10px;padding:13px 17px;display:flex;align-items:center;gap:11px;margin-bottom:14px;}
+        .gid-code{font-family:'Courier New',monospace;font-size:21px;font-weight:700;letter-spacing:4px;flex:1;}
+        /* Game layout */
+        .glayout{display:grid;grid-template-columns:265px 1fr 245px;height:calc(100vh - 56px);}
+        @media(max-width:880px){.glayout{grid-template-columns:1fr;height:auto;}}
+        .gsl{border-right:1.5px solid var(--border);overflow-y:auto;padding:15px;display:flex;flex-direction:column;gap:11px;}
+        .gsr{border-left:1.5px solid var(--border);overflow-y:auto;padding:15px;display:flex;flex-direction:column;gap:11px;}
+        .gmain{overflow-y:auto;padding:15px;display:flex;flex-direction:column;gap:13px;}
+        .gpcard{padding:9px 11px;border:1.5px solid var(--border);border-radius:10px;background:#fff;display:flex;align-items:center;gap:8px;transition:border-color .18s,box-shadow .18s;}
+        .gpcard.active{border-color:var(--gold);box-shadow:0 0 0 2px rgba(201,168,76,.18);}
+        .gpcard.bk{opacity:.3;}
+        .gcash{font-size:13px;font-weight:700;color:var(--green);}
+        .gstat{font-size:10px;color:#aaa;}
+        /* Board */
+        .bwrap{aspect-ratio:1;width:100%;max-width:430px;margin:0 auto;}
+        .bgrid{width:100%;height:100%;display:grid;grid-template-columns:48px repeat(9,1fr) 48px;
+            grid-template-rows:48px repeat(9,1fr) 48px;border:2.5px solid var(--ink);border-radius:3px;overflow:hidden;background:#e8f5e9;}
+        .bcenter{grid-column:2/11;grid-row:2/11;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#e8f5e9;}
+        .bspace{border:.5px solid rgba(0,0,0,.13);display:flex;flex-direction:column;align-items:center;
+            justify-content:center;font-size:6px;font-weight:600;text-align:center;padding:1px;position:relative;overflow:hidden;}
+        .bspace:hover{transform:scale(1.08);z-index:10;transition:transform .11s;}
+        .bcolor{width:100%;height:7px;flex-shrink:0;}
+        .bname{font-size:5px;line-height:1.2;padding:1px;}
+        .bcorner{border:1px solid rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;
+            font-size:7px;font-weight:700;text-align:center;background:#f0f9f0;position:relative;}
+        .tok{position:absolute;width:9px;height:9px;border-radius:50%;border:1.5px solid #fff;
+            box-shadow:0 1px 3px rgba(0,0,0,.28);font-size:5px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;}
+        /* Dice */
+        .darea{display:flex;gap:9px;align-items:center;justify-content:center;padding:14px;background:#fff;border:1.5px solid var(--border);border-radius:12px;}
+        .die{width:46px;height:46px;background:#fff;border:2.5px solid var(--ink);border-radius:8px;
+            display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);padding:5px;gap:2px;box-shadow:3px 3px 0 var(--ink);}
+        .die.roll{animation:dr .42s ease;}
+        @keyframes dr{0%,100%{transform:rotate(0) scale(1)}25%{transform:rotate(-13deg) scale(1.1)}50%{transform:rotate(13deg) scale(.95)}75%{transform:rotate(-6deg) scale(1.05)}}
+        .pip{border-radius:50%;background:var(--ink);} .pip.off{background:transparent;}
+        /* Actions */
+        .agrid{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+        /* Props */
+        .proprow{padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#fff;margin-bottom:7px;}
+        .pdot{width:10px;height:10px;border-radius:3px;flex-shrink:0;}
+        /* Events */
+        .elog{display:flex;flex-direction:column;gap:4px;max-height:170px;overflow-y:auto;}
+        .eitem{font-size:11px;padding:5px 8px;background:var(--cream);border-radius:6px;line-height:1.4;color:#555;}
+        /* Paused banner */
+        .pbanner{position:fixed;top:56px;left:0;right:0;background:#fbbf24;color:var(--ink);text-align:center;
+            padding:8px;font-weight:700;font-size:13px;z-index:200;border-bottom:2px solid var(--ink);}
+        /* Admin */
+        .alayout{display:grid;grid-template-columns:250px 1fr;height:calc(100vh - 56px);}
+        .aside{border-right:1.5px solid var(--border);padding:18px;overflow-y:auto;}
+        .amain{padding:22px;overflow-y:auto;}
+        .agrow{padding:11px 13px;border:1.5px solid var(--border);border-radius:10px;background:#fff;margin-bottom:7px;cursor:pointer;transition:border-color .13s;}
+        .agrow:hover{border-color:var(--ink);}
+        .agrow.sel{border-color:var(--gold);box-shadow:0 0 0 2px rgba(201,168,76,.18);}
+        /* Trade */
+        .tsection{background:var(--cream);border-radius:9px;padding:13px;}
+        /* Scrollbar */
+        ::-webkit-scrollbar{width:5px;} ::-webkit-scrollbar-track{background:transparent;}
+        ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+    </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+    const { useState, useEffect, useCallback, createContext, useContext } = React;
+
+    /* ─── CONFIG ─── change to match your server */
+    const SERVER_URL = 'http://localhost:5126';
+
+    /* ─── CONSTANTS ─── */
+    const COLORS = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c','#e67e22','#34495e'];
+    const BCOLORS = { Brown:'#8B4513',LightBlue:'#ADD8E6',Pink:'#FF69B4',Orange:'#FFA500',
+        Red:'#FF0000',Yellow:'#FFD700',Green:'#228B22',DarkBlue:'#00008B' };
+    const SPACES = [
+        {id:0,name:'GO',type:'Go'},{id:1,name:'Mediterranean',type:'Street',color:'Brown'},
+        {id:2,name:'Community\nChest',type:'CommunityChest'},{id:3,name:'Baltic',type:'Street',color:'Brown'},
+        {id:4,name:'Income Tax',type:'Tax'},{id:5,name:'Reading RR',type:'Railroad'},
+        {id:6,name:'Oriental',type:'Street',color:'LightBlue'},{id:7,name:'Chance',type:'Chance'},
+        {id:8,name:'Vermont',type:'Street',color:'LightBlue'},{id:9,name:'Connecticut',type:'Street',color:'LightBlue'},
+        {id:10,name:'Jail',type:'Jail'},{id:11,name:'St. Charles',type:'Street',color:'Pink'},
+        {id:12,name:'Electric Co.',type:'Utility'},{id:13,name:'States',type:'Street',color:'Pink'},
+        {id:14,name:'Virginia',type:'Street',color:'Pink'},{id:15,name:'Pennsylvania RR',type:'Railroad'},
+        {id:16,name:'St. James',type:'Street',color:'Orange'},{id:17,name:'Community\nChest',type:'CommunityChest'},
+        {id:18,name:'Tennessee',type:'Street',color:'Orange'},{id:19,name:'New York',type:'Street',color:'Orange'},
+        {id:20,name:'Free\nParking',type:'FreeParking'},{id:21,name:'Kentucky',type:'Street',color:'Red'},
+        {id:22,name:'Chance',type:'Chance'},{id:23,name:'Indiana',type:'Street',color:'Red'},
+        {id:24,name:'Illinois',type:'Street',color:'Red'},{id:25,name:'B&O RR',type:'Railroad'},
+        {id:26,name:'Atlantic',type:'Street',color:'Yellow'},{id:27,name:'Ventnor',type:'Street',color:'Yellow'},
+        {id:28,name:'Water Works',type:'Utility'},{id:29,name:'Marvin Gdns',type:'Street',color:'Yellow'},
+        {id:30,name:'Go To Jail',type:'GoToJail'},{id:31,name:'Pacific',type:'Street',color:'Green'},
+        {id:32,name:'N. Carolina',type:'Street',color:'Green'},{id:33,name:'Community\nChest',type:'CommunityChest'},
+        {id:34,name:'Pennsylvania',type:'Street',color:'Green'},{id:35,name:'Short Line RR',type:'Railroad'},
+        {id:36,name:'Chance',type:'Chance'},{id:37,name:'Park Place',type:'Street',color:'DarkBlue'},
+        {id:38,name:'Luxury Tax',type:'Tax'},{id:39,name:'Boardwalk',type:'Street',color:'DarkBlue'},
+    ];
+
+    /* ─── SIGNALR SERVICE ─── */
+    class HubService {
+        constructor() { this.conn = null; this.h = {}; }
+        start() {
+            this.conn = new signalR.HubConnectionBuilder()
+                .withUrl(`${SERVER_URL}/game-hub`)
+                .withAutomaticReconnect([0,2000,5000,10000])
+                .configureLogging(signalR.LogLevel.Warning)
+                .build();
+            ['GameStateUpdated','Error','TradeProposed','GameForceEnded',
+                'GamePaused','GameResumed','PlayerKicked','Kicked'].forEach(e =>
+                this.conn.on(e, (...a) => this.fire(e, ...a)));
+            this.conn.onreconnecting(() => this.fire('Reconnecting'));
+            this.conn.onreconnected(()  => this.fire('Reconnected'));
+            this.conn.onclose(()        => this.fire('Closed'));
+            return this.conn.start();
+        }
+        on(e, fn) {
+            if (!this.h[e]) this.h[e] = [];
+            this.h[e].push(fn);
+            return () => { this.h[e] = this.h[e].filter(f => f !== fn); };
+        }
+        fire(e, ...a) { (this.h[e]||[]).forEach(f => f(...a)); }
+        call(m, ...a) { return this.conn ? this.conn.invoke(m, ...a) : Promise.reject('Not connected'); }
+    }
+    const gameHub = new HubService();
+
+    /* ─── CONTEXT ─── */
+    const Ctx = createContext(null);
+
+    /* ─── TOASTS ─── */
+    function Toasts({ list }) {
+        return (
+            <div className="tray">
+                {list.map(t => (
+                    <div key={t.id} className={`toast${t.type==='error'?' toast-error':t.type==='success'?' toast-success':''}`}>
+                        {t.type==='error'?'⚠':t.type==='success'?'✓':'ℹ'} {t.msg}
+                    </div>
+                ))}
+            </div>
+        );
+    }
+
+    /* ─── HEADER ─── */
+    function Header({ page, gameId, me, isAdmin, onAdmin }) {
+        return (
+            <div className="header">
+                <div className="logo-icon">🏛</div>
+                <span className="logo-text">Monopoly</span>
+                <div className="header-right">
+                    {page==='lobby' && <span style={{fontSize:12,color:'#aaa'}}>
+          Lobby · <code style={{background:'var(--cream)',padding:'1px 6px',borderRadius:4}}>{gameId}</code>
+        </span>}
+                    {page==='game' && <span style={{color:'var(--green)',fontWeight:600,fontSize:12}}>● Live</span>}
+                    {me && <div className="hbadge">{me}</div>}
+                    {isAdmin && page!=='admin' && <button className="btn btn-ghost btn-sm" onClick={onAdmin}>⚙ Admin</button>}
+                </div>
+            </div>
+        );
+    }
+
+    /* ─── HOME PAGE ─── */
+    function HomePage({ onCreateAndJoin, onJoin, onAdminLogin }) {
+        const { toast } = useContext(Ctx);
+        const [name, setName]     = useState('');
+        const [joinId, setJoinId] = useState('');
+        const [tab, setTab]       = useState('browse');
+        const [loading, setLoading] = useState(false);
+        const [games, setGames]   = useState([]);
+        const [loadingGames, setLG] = useState(false);
+        const [adminKey, setAK]   = useState('');
+
+        const fetchGames = () => {
+            setLG(true);
+            fetch(`${SERVER_URL}/api/games`)
+                .then(r => r.json()).then(d => { setGames(d); setLG(false); })
+                .catch(() => setLG(false));
+        };
+
+        useEffect(() => { if (tab==='browse') fetchGames(); }, [tab]);
+
+        const create = () => {
+            if (!name.trim()) { toast('Enter your name','error'); return; }
+            setLoading(true);
+            fetch(`${SERVER_URL}/api/games`, { method:'POST' })
+                .then(r => r.json())
+                .then(d => { onCreateAndJoin(d.gameId, name.trim()); setLoading(false); })
+                .catch(() => { toast('Could not reach server','error'); setLoading(false); });
+        };
+
+        const joinById = () => {
+            if (!name.trim()) { toast('Enter your name','error'); return; }
+            if (!joinId.trim()) { toast('Enter a Game ID','error'); return; }
+            onJoin(joinId.trim().toUpperCase(), name.trim());
+        };
+
+        const joinGame = (gid) => {
+            if (!name.trim()) { toast('Enter your name first','error'); return; }
+            onJoin(gid, name.trim());
+        };
+
+        return (
+            <div className="page-enter">
+                <Header page="home" />
+                <div className="center" style={{padding:'28px 18px'}}>
+                    <div style={{textAlign:'center',marginBottom:32}}>
+                        <div className="big-icon">🏛</div>
+                        <h1 className="htitle">Play <span>Monopoly</span> Online</h1>
+                        <p style={{color:'#aaa',fontSize:13,marginTop:7}}>Real-time multiplayer · 2–8 players</p>
+                    </div>
+
+                    <div style={{width:'100%',maxWidth:520}}>
+                        <div className="card" style={{marginBottom:12}}>
+                            <div className="ig" style={{marginBottom:0}}>
+                                <label className="il">Your Name</label>
+                                <input className="input" placeholder="e.g. Alice" value={name}
+                                       onChange={e=>setName(e.target.value)} maxLength={20}/>
+                            </div>
+                        </div>
+
+                        <div style={{display:'flex',gap:5,marginBottom:11}}>
+                            {['browse','join','admin'].map(t=>(
+                                <button key={t} className={`btn btn-sm ${tab===t?'btn-ink':'btn-ghost'}`} onClick={()=>setTab(t)}>
+                                    {t==='browse'?'🎮 Browse':t==='join'?'# Join by ID':'⚙ Admin'}
+                                </button>
+                            ))}
+                        </div>
+
+                        {tab==='browse' && (
+                            <div className="card">
+                                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:13}}>
+                                    <div className="slabel" style={{margin:0}}>Open Games</div>
+                                    <button className="btn btn-sm btn-ghost" onClick={fetchGames}>↻ Refresh</button>
+                                </div>
+                                {loadingGames && <div style={{display:'flex',justifyContent:'center',padding:18}}><div className="spin"></div></div>}
+                                {!loadingGames && games.length===0 && (
+                                    <div style={{color:'#ccc',fontSize:13,textAlign:'center',padding:'14px 0'}}>No open games. Create one!</div>
+                                )}
+                                <div className="gbrowser">
+                                    {games.map(g=>(
+                                        <div key={g.gameId} className="grow" onClick={()=>joinGame(g.gameId)}>
+                                            <div>
+                                                <code style={{fontFamily:'monospace',fontWeight:700,letterSpacing:2,fontSize:14}}>{g.gameId}</code>
+                                                <div style={{fontSize:11,color:'#aaa',marginTop:2}}>
+                                                    Host: {g.hostName} &nbsp;·&nbsp; {g.playerCount}/{g.maxPlayers} players
+                                                </div>
+                                            </div>
+                                            <div style={{marginLeft:'auto',display:'flex',gap:6,alignItems:'center'}}>
+                                                <span className="badge bg-green">Waiting</span>
+                                                <span style={{fontSize:17}}>→</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button className="btn btn-gold btn-full" onClick={create} disabled={loading} style={{marginTop:10}}>
+                                    {loading ? <span style={{display:'flex',alignItems:'center',gap:7}}><div className="spin"></div>Creating…</span> : '＋ Create New Game'}
+                                </button>
+                            </div>
+                        )}
+
+                        {tab==='join' && (
+                            <div className="card">
+                                <div className="ig">
+                                    <label className="il">Game ID</label>
+                                    <input className="input" placeholder="e.g. AB12CD34" value={joinId}
+                                           onChange={e=>setJoinId(e.target.value.toUpperCase())}
+                                           onKeyDown={e=>e.key==='Enter'&&joinById()}
+                                           style={{fontFamily:'monospace',letterSpacing:3,fontSize:18}} maxLength={8}/>
+                                </div>
+                                <button className="btn btn-green btn-full btn-lg" onClick={joinById}>→ Join Game</button>
+                            </div>
+                        )}
+
+                        {tab==='admin' && (
+                            <div className="card">
+                                <div className="ig">
+                                    <label className="il">Admin Key</label>
+                                    <input className="input" type="password" placeholder="Enter admin key"
+                                           value={adminKey} onChange={e=>setAK(e.target.value)}
+                                           onKeyDown={e=>e.key==='Enter'&&onAdminLogin(adminKey)}/>
+                                </div>
+                                <button className="btn btn-ink btn-full" onClick={()=>onAdminLogin(adminKey)}>⚙ Enter Admin Panel</button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    /* ─── LOBBY PAGE ─── */
+    function LobbyPage({ gameId, playerName, gameState, onStart, onLeave, isAdmin, onAdmin }) {
+        const [copied, setCopied] = useState(false);
+        const players = gameState?.players || [];
+        const hostId  = gameState?.hostId;
+        const me      = players.find(p=>p.name===playerName);
+        const isHost  = me && (me.id===hostId || players[0]?.name===playerName);
+
+        const copy = () => {
+            navigator.clipboard.writeText(gameId).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false),2000); });
+        };
+
+        return (
+            <div className="page-enter">
+                <Header page="lobby" gameId={gameId} me={playerName} isAdmin={isAdmin} onAdmin={onAdmin}/>
+                <div className="lobby-grid">
+                    <div>
+                        <h2 style={{fontSize:22,fontWeight:900,marginBottom:4}}>Game Lobby</h2>
+                        <p style={{color:'#999',fontSize:13,marginBottom:18}}>Share the Game ID to invite friends.</p>
+
+                        <div className="gid-box">
+                            <div>
+                                <div style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:1,color:'#bbb',marginBottom:3}}>Game ID</div>
+                                <div className="gid-code">{gameId}</div>
+                            </div>
+                            <button className="btn btn-ghost btn-sm" style={{marginLeft:'auto'}} onClick={copy}>
+                                {copied?'✓ Copied':'⎘ Copy'}
+                            </button>
+                        </div>
+
+                        <div className="slabel">Players ({players.length}/8)</div>
+                        <div className="plist">
+                            {players.map((p,i)=>(
+                                <div key={p.id} className="pitem">
+                                    <div className="pav" style={{background:COLORS[i%COLORS.length],color:'#fff'}}>{p.name[0].toUpperCase()}</div>
+                                    <div style={{flex:1}}>
+                                        <div style={{fontWeight:600,fontSize:13}}>{p.name}</div>
+                                        <div style={{fontSize:11,color:'#aaa'}}>{p.isConnected?'Connected':'Disconnected'}</div>
+                                    </div>
+                                    {p.id===hostId && <span className="badge bg-yellow">👑 Host</span>}
+                                    {p.name===playerName && p.id!==hostId && <span className="badge bg-blue">You</span>}
+                                </div>
+                            ))}
+                            {players.length<8 && (
+                                <div className="pitem" style={{opacity:.3,borderStyle:'dashed'}}>
+                                    <div className="pav" style={{background:'#eee',color:'#ccc'}}>+</div>
+                                    <div style={{color:'#ccc',fontSize:13}}>Waiting for player…</div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div>
+                        <div className="card" style={{marginBottom:11}}>
+                            <div style={{fontSize:13,fontWeight:700,marginBottom:11}}>Game Settings</div>
+                            {[['Min players','2'],['Max players','8'],['Starting cash','$1,500'],['Turn timer','90s']].map(([k,v])=>(
+                                <div key={k} style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:7}}>
+                                    <span style={{color:'#999'}}>{k}</span><strong>{v}</strong>
+                                </div>
+                            ))}
+                        </div>
+
+                        {isHost
+                            ? <button className="btn btn-green btn-full btn-lg" onClick={onStart} disabled={players.length<2}>
+                                {players.length<2?`Need ${2-players.length} more player${players.length===1?'':'s'}`:'▶ Start Game'}
+                            </button>
+                            : <div style={{textAlign:'center',padding:16,border:'1.5px solid var(--border)',borderRadius:12,background:'#fff'}}>
+                                <div className="spin" style={{margin:'0 auto 9px'}}></div>
+                                <div style={{fontSize:13,color:'#aaa'}}>Waiting for host to start…</div>
+                            </div>
+                        }
+                        <button className="btn btn-ghost btn-full" style={{marginTop:9}} onClick={onLeave}>← Leave</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    /* ─── DICE ─── */
+    const PIPS = {1:[[1,1]],2:[[0,0],[2,2]],3:[[0,0],[1,1],[2,2]],
+        4:[[0,0],[0,2],[2,0],[2,2]],5:[[0,0],[0,2],[1,1],[2,0],[2,2]],6:[[0,0],[0,2],[1,0],[1,2],[2,0],[2,2]]};
+    function Die({ value, rolling }) {
+        const g = Array(9).fill(false);
+        if (value) PIPS[value].forEach(([r,c])=>{ g[r*3+c]=true; });
+        return (
+            <div className={`die${rolling?' roll':''}`}>
+                {g.map((on,i)=><div key={i} className={`pip${on?'':' off'}`}/>)}
+            </div>
+        );
+    }
+
+    /* ─── BOARD ─── */
+    function Board({ board, players }) {
+        const pm = {};
+        (players||[]).forEach((p,i)=>{ if(!pm[p.position]) pm[p.position]=[]; pm[p.position].push({...p,ci:i}); });
+
+        const toks = (id) => (pm[id]||[]).map((p,i)=>(
+            <div key={p.id} className="tok" style={{background:COLORS[p.ci%COLORS.length],top:2+i*10,right:2}} title={p.name}>
+                {p.name[0]}
+            </div>
+        ));
+
+        const bg = (space) => {
+            const bp = board?.find(b=>b.id===space.id);
+            if (bp?.ownerId) {
+                const idx = (players||[]).findIndex(p=>p.id===bp.ownerId);
+                if (idx>=0) return {background:COLORS[idx%COLORS.length]+'22'};
+            }
+            return {};
+        };
+
+        const Cell = ({space,style={}}) => (
+            <div className="bspace" style={{...bg(space),...style}} title={space.name.replace('\n',' ')}>
+                {space.color && <div className="bcolor" style={{background:BCOLORS[space.color]||'#ccc'}}/>}
+                <div className="bname">{space.name}</div>
+                {toks(space.id)}
+            </div>
+        );
+
+        return (
+            <div className="bwrap">
+                <div className="bgrid">
+                    <div className="bcorner" style={{gridColumn:1,gridRow:11,fontSize:8,background:'#e8f5e9'}}>🏁<br/>GO{toks(0)}</div>
+                    <div className="bcorner" style={{gridColumn:11,gridRow:11}}>⛓<br/>Jail{toks(10)}</div>
+                    <div className="bcorner" style={{gridColumn:11,gridRow:1}}>🅿<br/>Free{toks(20)}</div>
+                    <div className="bcorner" style={{gridColumn:1,gridRow:1}}>🚔<br/>Jail!{toks(30)}</div>
+                    {SPACES.slice(1,10).map((s,i)=>(
+                        <div key={s.id} style={{gridColumn:i+2,gridRow:11,display:'flex',flexDirection:'column'}}>
+                            <Cell space={s} style={{height:'100%',flexDirection:'column-reverse'}}/>
+                        </div>
+                    ))}
+                    {SPACES.slice(11,20).map((s,i)=>(
+                        <div key={s.id} style={{gridColumn:11,gridRow:10-i,display:'flex'}}>
+                            <Cell space={s} style={{height:'100%',width:'100%',flexDirection:'row-reverse'}}/>
+                        </div>
+                    ))}
+                    {SPACES.slice(21,30).map((s,i)=>(
+                        <div key={s.id} style={{gridColumn:10-i,gridRow:1,display:'flex',flexDirection:'column'}}>
+                            <Cell space={s} style={{height:'100%'}}/>
+                        </div>
+                    ))}
+                    {SPACES.slice(31,40).map((s,i)=>(
+                        <div key={s.id} style={{gridColumn:1,gridRow:i+2,display:'flex'}}>
+                            <Cell space={s} style={{height:'100%',width:'100%',flexDirection:'row'}}/>
+                        </div>
+                    ))}
+                    <div className="bcenter">
+                        <div style={{fontFamily:'Playfair Display,serif',fontSize:'clamp(11px,2vw,19px)',fontWeight:900,textAlign:'center'}}>MONOPOLY</div>
+                        <div style={{fontSize:8,color:'#bbb',marginTop:2}}>Online Edition</div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    /* ─── JAIL MODAL ─── */
+    function JailModal({ player, onClose, onAct }) {
+        return (
+            <div className="overlay">
+                <div className="mbox">
+                    <h3 style={{marginBottom:7}}>⛓ You're in Jail</h3>
+                    <p style={{color:'#999',fontSize:13,marginBottom:18}}>Choose how to proceed:</p>
+                    <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                        {player.keptCardCount>0 && (
+                            <button className="btn btn-gold btn-full" onClick={()=>{ onAct(true,false); onClose(); }}>
+                                🃏 Use Get Out of Jail Free Card
+                            </button>
+                        )}
+                        <button className="btn btn-ghost btn-full" onClick={()=>{ onAct(false,true); onClose(); }}>💵 Pay $50 Fine</button>
+                        <button className="btn btn-ghost btn-full" onClick={()=>{ onAct(false,false); onClose(); }}>🎲 Try to Roll Doubles</button>
+                        <button className="btn btn-sm btn-ghost btn-full" style={{color:'#aaa'}} onClick={onClose}>Cancel</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    /* ─── INCOMING TRADE MODAL ─── */
+    function IncomingTradeModal({ offer, gameId, onDone }) {
+        const accept = () => { gameHub.call('RespondToTrade', gameId, offer.id, true); onDone(); };
+        const reject = () => { gameHub.call('RespondToTrade', gameId, offer.id, false); onDone(); };
+        return (
+            <div className="overlay">
+                <div className="mbox">
+                    <h3 style={{marginBottom:5}}>Trade Proposal</h3>
+                    <p style={{color:'#999',fontSize:13,marginBottom:16}}><strong>{offer.fromPlayerName}</strong> wants to trade</p>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:11,marginBottom:18}}>
+                        <div className="tsection">
+                            <div className="slabel">They Offer</div>
+                            {offer.offeredCash>0 && <div style={{fontSize:13,marginBottom:3}}>💵 ${offer.offeredCash}</div>}
+                            {(offer.offeredPropertyIds||[]).map(pid=><div key={pid} style={{fontSize:12,marginBottom:2}}>🏠 #{pid}</div>)}
+                            {!offer.offeredCash && !(offer.offeredPropertyIds||[]).length && <span style={{fontSize:11,color:'#ccc'}}>Nothing</span>}
+                        </div>
+                        <div className="tsection">
+                            <div className="slabel">They Want</div>
+                            {offer.requestedCash>0 && <div style={{fontSize:13,marginBottom:3}}>💵 ${offer.requestedCash}</div>}
+                            {(offer.requestedPropertyIds||[]).map(pid=><div key={pid} style={{fontSize:12,marginBottom:2}}>🏠 #{pid}</div>)}
+                            {!offer.requestedCash && !(offer.requestedPropertyIds||[]).length && <span style={{fontSize:11,color:'#ccc'}}>Nothing</span>}
+                        </div>
+                    </div>
+                    <div style={{display:'flex',gap:9}}>
+                        <button className="btn btn-green btn-full" onClick={accept}>✓ Accept</button>
+                        <button className="btn btn-red btn-full" onClick={reject}>✕ Decline</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    /* ─── PROPOSE TRADE MODAL ─── */
+    function ProposeTradeModal({ target, myProps, board, gameId, onClose }) {
+        const { toast } = useContext(Ctx);
+        const [oCash, setOC] = useState('0');
+        const [rCash, setRC] = useState('0');
+        const [oProps, setOP] = useState([]);
+        const [rProps, setRP] = useState([]);
+        const theirProps = board.filter(b=>b.ownerId===target.id);
+        const toggle = (list, set, id) => set(l => l.includes(id)?l.filter(x=>x!==id):[...l,id]);
+
+        const send = () => {
+            gameHub.call('ProposeTrade', gameId, target.id, {
+                offeredCash: parseInt(oCash)||0, requestedCash: parseInt(rCash)||0,
+                offeredPropertyIds: oProps, requestedPropertyIds: rProps,
+                offeredCardIds: [], requestedCardIds: []
+            }).then(()=>{ toast('Trade proposal sent!','success'); onClose(); })
+                .catch(e=>toast(e.message||'Failed','error'));
+        };
+
+        return (
+            <div className="overlay">
+                <div className="mbox mbox-wide">
+                    <h3 style={{marginBottom:4}}>Propose Trade</h3>
+                    <p style={{color:'#999',fontSize:13,marginBottom:18}}>Trading with <strong>{target.name}</strong></p>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:15,marginBottom:18}}>
+                        <div>
+                            <div className="slabel">You Offer</div>
+                            <div className="ig"><label className="il">Cash ($)</label>
+                                <input className="input" type="number" min="0" value={oCash} onChange={e=>setOC(e.target.value)}/></div>
+                            <div className="slabel" style={{marginTop:7}}>Your Properties</div>
+                            {myProps.length===0 && <div style={{fontSize:11,color:'#ccc'}}>None</div>}
+                            {myProps.map(p=>(
+                                <label key={p.id} style={{display:'flex',alignItems:'center',gap:7,fontSize:12,marginBottom:5,cursor:'pointer'}}>
+                                    <input type="checkbox" checked={oProps.includes(p.id)} onChange={()=>toggle(oProps,setOP,p.id)}/>{p.name}
+                                </label>
+                            ))}
+                        </div>
+                        <div>
+                            <div className="slabel">You Request</div>
+                            <div className="ig"><label className="il">Cash ($)</label>
+                                <input className="input" type="number" min="0" value={rCash} onChange={e=>setRC(e.target.value)}/></div>
+                            <div className="slabel" style={{marginTop:7}}>Their Properties</div>
+                            {theirProps.length===0 && <div style={{fontSize:11,color:'#ccc'}}>None</div>}
+                            {theirProps.map(p=>(
+                                <label key={p.id} style={{display:'flex',alignItems:'center',gap:7,fontSize:12,marginBottom:5,cursor:'pointer'}}>
+                                    <input type="checkbox" checked={rProps.includes(p.id)} onChange={()=>toggle(rProps,setRP,p.id)}/>{p.name}
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                    <div style={{display:'flex',gap:9}}>
+                        <button className="btn btn-green btn-full" onClick={send}>📤 Send Proposal</button>
+                        <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    /* ─── GAME PAGE ─── */
+    function GamePage({ gameId, playerName, gameState, onLeave, isAdmin, onAdmin }) {
+        const { toast } = useContext(Ctx);
+        const [dice, setDice]       = useState([null,null]);
+        const [rolling, setRolling] = useState(false);
+        const [tradeIn, setTradeIn] = useState(null);
+        const [jailOpen, setJail]   = useState(false);
+        const [paused, setPaused]   = useState(false);
+        const [trading, setTrading] = useState(null);
+
+        const players = gameState?.players || [];
+        const board   = gameState?.board   || [];
+        const logs    = gameState?.eventLog || [];
+        const cur     = gameState?.currentPlayer;
+        const myTurn  = cur?.name === playerName;
+        const me      = players.find(p=>p.name===playerName);
+        const myProps = board.filter(b=>b.ownerId===me?.id);
+        const cSpace  = me ? SPACES[me.position] : null;
+        const bSpace  = board.find(b=>b.id===me?.position);
+        const owned   = !!bSpace?.ownerId;
+        const mine    = bSpace?.ownerId===me?.id;
+        const canBuy  = ['Street','Railroad','Utility'].includes(cSpace?.type) && !owned;
+        const winner  = gameState?.status==='Finished' ? players.find(p=>!p.isBankrupt) : null;
+
+        useEffect(()=>{
+            const offs=[
+                gameHub.on('TradeProposed', setTradeIn),
+                gameHub.on('GamePaused',    ()=>setPaused(true)),
+                gameHub.on('GameResumed',   ()=>setPaused(false)),
+                gameHub.on('GameForceEnded',()=>{ toast('Game ended by admin','error'); onLeave(); }),
+                gameHub.on('Kicked',        msg=>{ toast(msg,'error'); onLeave(); }),
+            ];
+            return ()=>offs.forEach(f=>f());
+        },[]);
+
+        const call = (m,...a) => gameHub.call(m,...a).catch(e=>toast(e.message||'Action failed','error'));
+
+        const roll = () => {
+            setRolling(true);
+            const iv = setInterval(()=>setDice([Math.ceil(Math.random()*6),Math.ceil(Math.random()*6)]),80);
+            setTimeout(()=>{ clearInterval(iv); setRolling(false); },460);
+            call('RollDice', gameId);
+        };
+
+        return (
+            <div className="page-enter">
+                <Header page="game" me={playerName} isAdmin={isAdmin} onAdmin={onAdmin}/>
+                {paused && <div className="pbanner">⏸ Game paused by admin</div>}
+
+                {winner && (
+                    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.68)',display:'flex',alignItems:'center',
+                        justifyContent:'center',zIndex:600,backdropFilter:'blur(4px)'}}>
+                        <div className="mbox" style={{textAlign:'center'}}>
+                            <div style={{fontSize:50,marginBottom:11}}>🏆</div>
+                            <h2 style={{fontSize:24,marginBottom:7}}>{winner.name} Wins!</h2>
+                            <p style={{color:'#999',marginBottom:20}}>Last player standing!</p>
+                            <button className="btn btn-ink btn-full" onClick={onLeave}>← Back to Home</button>
+                        </div>
+                    </div>
+                )}
+
+                <div className="glayout">
+                    {/* LEFT: Players */}
+                    <div className="gsl">
+                        <div className="slabel">Players</div>
+                        {players.map((p,i)=>(
+                            <div key={p.id} className={`gpcard${p.id===cur?.id?' active':''}${p.isBankrupt?' bk':''}`}>
+                                <div className="pav" style={{background:COLORS[i%COLORS.length],color:'#fff',width:28,height:28,fontSize:11}}>
+                                    {p.name[0]}
+                                </div>
+                                <div style={{flex:1,minWidth:0}}>
+                                    <div style={{fontWeight:600,fontSize:11,display:'flex',alignItems:'center',gap:4}}>
+                                        {p.name}
+                                        {p.name===playerName && <span style={{fontSize:9,color:'#bbb'}}>(you)</span>}
+                                        {p.id===cur?.id && '🎲'}
+                                    </div>
+                                    <div className="gcash">${p.cash?.toLocaleString()}</div>
+                                    <div className="gstat">
+                                        #{p.position} · {p.isInJail?'⛓Jail':p.isBankrupt?'💀Out':p.isConnected?'🟢':'🔴Away'}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                        <div className="div">Info</div>
+                        <div style={{padding:'10px 13px',background:'#fff',border:'1.5px solid var(--border)',borderRadius:10}}>
+                            {[['Turn',`#${gameState?.turn||0}`],['Current',cur?.name||'—'],['Active',players.filter(p=>!p.isBankrupt).length]].map(([k,v])=>(
+                                <div key={k} style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:5}}>
+                                    <span style={{color:'#aaa'}}>{k}</span><strong style={{color:'var(--gold)'}}>{v}</strong>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* CENTER */}
+                    <div className="gmain">
+                        <Board board={board} players={players.filter(p=>!p.isBankrupt)}/>
+
+                        <div className="darea">
+                            <Die value={dice[0]} rolling={rolling}/>
+                            <Die value={dice[1]} rolling={rolling}/>
+                            {dice[0]&&dice[1]&&(
+                                <div style={{fontSize:13,color:'#aaa',marginLeft:8}}>
+                                    = {dice[0]+dice[1]}
+                                    {dice[0]===dice[1]&&<span style={{color:'var(--gold)',marginLeft:6,fontWeight:700}}>Doubles!</span>}
+                                </div>
+                            )}
+                        </div>
+
+                        {myTurn && !paused && gameState?.status==='InProgress' && (
+                            <div className="card">
+                                <div className="slabel" style={{marginBottom:9}}>Your Turn</div>
+                                {me?.isInJail && (
+                                    <button className="btn btn-red btn-full" style={{marginBottom:9}} onClick={()=>setJail(true)}>
+                                        ⛓ Handle Jail Situation
+                                    </button>
+                                )}
+                                <div className="agrid">
+                                    <button className="btn btn-gold btn-lg" onClick={roll} disabled={rolling||me?.isInJail}>
+                                        {rolling?'…':'🎲 Roll Dice'}
+                                    </button>
+                                    <button className="btn btn-green" onClick={()=>call('BuyProperty',gameId)} disabled={!canBuy}>
+                                        🏠 Buy {canBuy?'($'+((bSpace?.purchasePrice)||'?')+')':'Property'}
+                                    </button>
+                                    <button className="btn btn-ghost" onClick={()=>call('DeclineProperty',gameId)} disabled={!canBuy}>
+                                        ✕ Decline
+                                    </button>
+                                    <button className="btn btn-ghost" onClick={()=>call('EndTurn',gameId)}>⏭ End Turn</button>
+                                </div>
+                                {cSpace && (
+                                    <div style={{marginTop:11,padding:'8px 11px',background:'var(--cream)',borderRadius:8,fontSize:12}}>
+                                        📍 <strong>{cSpace.name.replace('\n',' ')}</strong>
+                                        {canBuy&&<span style={{color:'var(--green)',marginLeft:5}}>← available!</span>}
+                                        {owned&&!mine&&<span style={{color:'var(--red)',marginLeft:5}}>← pay rent!</span>}
+                                        {mine&&<span style={{color:'#aaa',marginLeft:5}}>← yours</span>}
+                                    </div>
+                                )}
+                                <button className="btn btn-sm btn-ghost" style={{marginTop:9,color:'var(--red)',width:'auto'}}
+                                        onClick={()=>{ if(confirm('Resign from game?')) call('ResignPlayer',gameId,me?.id); }}>
+                                    🏳 Resign
+                                </button>
+                            </div>
+                        )}
+
+                        {!myTurn && gameState?.status==='InProgress' && (
+                            <div style={{textAlign:'center',padding:16,background:'#fff',border:'1.5px solid var(--border)',borderRadius:12}}>
+                                <div className="spin" style={{margin:'0 auto 9px'}}></div>
+                                <div style={{fontSize:13,color:'#aaa'}}>Waiting for <strong>{cur?.name}</strong>…</div>
+                            </div>
+                        )}
+
+                        <div>
+                            <div className="slabel">Event Log</div>
+                            <div className="elog">
+                                {[...logs].reverse().map((e,i)=><div key={i} className="eitem">{e}</div>)}
+                                {logs.length===0&&<div className="eitem" style={{color:'#ccc'}}>No events yet.</div>}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* RIGHT: Properties + Trade */}
+                    <div className="gsr">
+                        <div className="slabel">Your Properties ({myProps.length})</div>
+                        {myProps.length===0 && <div style={{fontSize:11,color:'#ccc'}}>No properties yet.</div>}
+                        {myProps.map(p=>{
+                            const sp = SPACES.find(s=>s.id===p.id);
+                            return (
+                                <div key={p.id} className="proprow">
+                                    <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:5}}>
+                                        {sp?.color&&<div className="pdot" style={{background:BCOLORS[sp.color]||'#ccc'}}/>}
+                                        <span style={{fontSize:11,fontWeight:600,flex:1}}>{p.name}</span>
+                                        {p.isMortgaged&&<span className="badge bg-red" style={{fontSize:9}}>Mort.</span>}
+                                    </div>
+                                    <div style={{fontSize:10,color:'#aaa',marginBottom:6}}>
+                                        {p.hasHotel?'🏨 Hotel':p.houseCount>0?`🏠 ${p.houseCount} house${p.houseCount!==1?'s':''}` : 'No buildings'}
+                                    </div>
+                                    {myTurn && !paused && (
+                                        <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+                                            {sp?.type==='Street'&&!p.isMortgaged&&p.houseCount<4&&!p.hasHotel&&(
+                                                <button className="btn btn-sm btn-ghost" style={{fontSize:10}} onClick={()=>call('BuildHouse',gameId,p.id)}>+🏠</button>
+                                            )}
+                                            {sp?.type==='Street'&&!p.isMortgaged&&p.houseCount===4&&!p.hasHotel&&(
+                                                <button className="btn btn-sm btn-ghost" style={{fontSize:10}} onClick={()=>call('BuildHotel',gameId,p.id)}>+🏨</button>
+                                            )}
+                                            <button className="btn btn-sm btn-ghost"
+                                                    style={{fontSize:10,color:p.isMortgaged?'var(--green)':'var(--red)'}}
+                                                    onClick={()=>call('ToggleMortgage',gameId,p.id)}>
+                                                {p.isMortgaged?'Unmortgage':'Mortgage'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+
+                        <div className="div">Trade</div>
+                        <div className="slabel">Trade With</div>
+                        {players.filter(p=>p.name!==playerName&&!p.isBankrupt).map((p,_)=>{
+                            const idx = players.indexOf(p);
+                            return (
+                                <button key={p.id} className="btn btn-ghost btn-sm btn-full"
+                                        style={{justifyContent:'flex-start',gap:7,marginBottom:5}}
+                                        onClick={()=>setTrading(p)}>
+                                    <div style={{width:17,height:17,borderRadius:'50%',background:COLORS[idx%COLORS.length],
+                                        color:'#fff',fontSize:8,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700}}>
+                                        {p.name[0]}
+                                    </div>
+                                    {p.name}
+                                </button>
+                            );
+                        })}
+
+                        <div className="div"/>
+                        <button className="btn btn-ghost btn-sm btn-full" onClick={onLeave}>← Leave Game</button>
+                    </div>
+                </div>
+
+                {tradeIn && <IncomingTradeModal offer={tradeIn} gameId={gameId} onDone={()=>setTradeIn(null)}/>}
+                {jailOpen && me && <JailModal player={me} onClose={()=>setJail(false)} onAct={(u,p)=>call('HandleJail',gameId,u,p)}/>}
+                {trading && <ProposeTradeModal target={trading} myProps={myProps} board={board} gameId={gameId} onClose={()=>setTrading(null)}/>}
+            </div>
+        );
+    }
+
+    /* ─── ADMIN PAGE ─── */
+    function AdminPage({ adminKey, onBack }) {
+        const { toast } = useContext(Ctx);
+        const [games, setGames]   = useState([]);
+        const [sel, setSel]       = useState(null);
+        const [detail, setDetail] = useState(null);
+        const [loading, setLoad]  = useState(false);
+        const [aconn, setAconn]   = useState(null);
+
+        const fetchGames = () => {
+            setLoad(true);
+            fetch(`${SERVER_URL}/api/games`)
+                .then(r=>r.json()).then(d=>{ setGames(d); setLoad(false); })
+                .catch(()=>{ toast('Could not load games','error'); setLoad(false); });
+        };
+
+        useEffect(()=>{
+            fetchGames();
+            const conn = new signalR.HubConnectionBuilder()
+                .withUrl(`${SERVER_URL}/admin-hub`)
+                .withAutomaticReconnect().configureLogging(signalR.LogLevel.Warning).build();
+            conn.on('GameDetails',    d  => setDetail(d));
+            conn.on('Error',          m  => toast(m,'error'));
+            conn.on('GameForceEnded', () => { toast('Game ended','success'); fetchGames(); });
+            conn.on('GamePaused',     () => { toast('Game paused','success'); fetchGames(); });
+            conn.on('GameResumed',    () => { toast('Game resumed','success'); fetchGames(); });
+            conn.on('PlayerKicked',   () => { toast('Player kicked','success'); });
+            conn.start().catch(()=>toast('Admin hub failed to connect','error'));
+            setAconn(conn);
+            return ()=>conn.stop();
+        },[]);
+
+        const adm = (conn, method, gid, ...rest) => {
+            if(!conn){ toast('Admin hub not connected','error'); return; }
+            conn.invoke(method, gid, adminKey, ...rest).catch(e=>toast(e.message||'Admin action failed','error'));
+        };
+
+        const pick = (gid) => {
+            setSel(gid); setDetail(null);
+            if(aconn) adm(aconn,'GetGameDetails',gid);
+        };
+
+        const sc = (s) => ({Waiting:'bg-yellow',InProgress:'bg-green',Paused:'bg-red',Finished:'bg-gray'}[s]||'bg-gray');
+
+        return (
+            <div className="page-enter">
+                <Header page="admin"/>
+                <div className="alayout">
+                    <div className="aside">
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:13}}>
+                            <div className="slabel" style={{margin:0}}>All Games</div>
+                            <button className="btn btn-sm btn-ghost" onClick={fetchGames}>↻</button>
+                        </div>
+                        {loading && <div className="spin" style={{margin:'18px auto'}}></div>}
+                        {!loading&&games.length===0&&<div style={{fontSize:11,color:'#ccc'}}>No games.</div>}
+                        {games.map(g=>(
+                            <div key={g.gameId} className={`agrow${sel===g.gameId?' sel':''}`} onClick={()=>pick(g.gameId)}>
+                                <code style={{fontFamily:'monospace',fontWeight:700,fontSize:13,letterSpacing:1}}>{g.gameId}</code>
+                                <div style={{display:'flex',gap:5,alignItems:'center',marginTop:5}}>
+                                    <span className={`badge ${sc(g.status)}`}>{g.status}</span>
+                                    <span style={{fontSize:10,color:'#aaa'}}>{g.playerCount} players</span>
+                                </div>
+                            </div>
+                        ))}
+                        <div className="div"/>
+                        <button className="btn btn-ghost btn-sm btn-full" onClick={onBack}>← Back to Home</button>
+                    </div>
+
+                    <div className="amain">
+                        {!sel&&(
+                            <div style={{color:'#ccc',marginTop:50,textAlign:'center'}}>
+                                <div style={{fontSize:36,marginBottom:9}}>⚙</div>
+                                Select a game from the sidebar
+                            </div>
+                        )}
+                        {sel&&(
+                            <>
+                                <div style={{display:'flex',alignItems:'center',gap:11,marginBottom:18}}>
+                                    <h2 style={{fontSize:19,fontWeight:900}}><code style={{letterSpacing:2}}>{sel}</code></h2>
+                                    {detail&&<span className={`badge ${sc(detail.status)}`}>{detail.status}</span>}
+                                </div>
+
+                                <div style={{display:'flex',gap:9,flexWrap:'wrap',marginBottom:22}}>
+                                    <button className="btn btn-ghost btn-sm" onClick={()=>{ setDetail(null); adm(aconn,'GetGameDetails',sel); }}>↻ Refresh</button>
+                                    <button className="btn btn-warn btn-sm" onClick={()=>adm(aconn,'PauseGame',sel)}>⏸ Pause</button>
+                                    <button className="btn btn-green btn-sm" onClick={()=>adm(aconn,'ResumeGame',sel)}>▶ Resume</button>
+                                    <button className="btn btn-red btn-sm" onClick={()=>{ if(confirm('Force end this game?')) adm(aconn,'ForceEndGame',sel); }}>⛔ Force End</button>
+                                </div>
+
+                                {!detail&&<div style={{display:'flex',gap:9,alignItems:'center',color:'#bbb'}}><div className="spin"></div>Loading…</div>}
+
+                                {detail&&(
+                                    <>
+                                        <div className="card" style={{marginBottom:14}}>
+                                            <div className="slabel">Stats</div>
+                                            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}}>
+                                                {[['Turn',detail.turn],['Players',detail.playerCount],['Status',detail.status]].map(([k,v])=>(
+                                                    <div key={k} style={{textAlign:'center',padding:9,background:'var(--cream)',borderRadius:8}}>
+                                                        <div style={{fontSize:18,fontWeight:900}}>{v}</div>
+                                                        <div style={{fontSize:10,color:'#aaa'}}>{k}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div className="card" style={{marginBottom:14}}>
+                                            <div className="slabel">Players</div>
+                                            {(detail.players||[]).map((p,i)=>(
+                                                <div key={p.id} style={{display:'flex',alignItems:'center',gap:9,padding:'9px 0',borderBottom:'1px solid var(--border)'}}>
+                                                    <div className="pav" style={{background:COLORS[i%COLORS.length],color:'#fff',width:28,height:28,fontSize:11}}>
+                                                        {p.name[0]}
+                                                    </div>
+                                                    <div style={{flex:1}}>
+                                                        <div style={{fontWeight:600,fontSize:12}}>{p.name}</div>
+                                                        <div style={{fontSize:10,color:'#aaa'}}>
+                                                            ${p.cash?.toLocaleString()} · Pos {p.position}
+                                                            {p.isInJail&&' · ⛓'}{p.isBankrupt&&' · 💀'}{!p.isConnected&&' · 🔴'}
+                                                        </div>
+                                                    </div>
+                                                    <div style={{display:'flex',gap:5,alignItems:'center'}}>
+                                                        <span className="badge bg-gray">{p.propertyCount} props</span>
+                                                        {!p.isBankrupt&&(
+                                                            <button className="btn btn-red btn-sm"
+                                                                    onClick={()=>{ if(confirm(`Kick ${p.name}?`)) adm(aconn,'KickPlayer',sel,p.id); }}>
+                                                                Kick
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        <div className="card">
+                                            <div className="slabel">Recent Events</div>
+                                            <div className="elog">
+                                                {(detail.recentLogs||[]).slice().reverse().map((e,i)=>(
+                                                    <div key={i} className="eitem">{e}</div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    /* ─── ROOT APP ─── */
+    function App() {
+        const [page, setPage]     = useState('home');
+        const [gameId, setGid]    = useState('');
+        const [player, setPlayer] = useState('');
+        const [state, setState]   = useState(null);
+        const [loading, setLoad]  = useState(true);
+        const [toasts, setToasts] = useState([]);
+        const [adminKey, setAK]   = useState('');
+
+        const toast = useCallback((msg, type='info') => {
+            const id = Date.now()+Math.random();
+            setToasts(t=>[...t,{id,msg,type}]);
+            setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),4000);
+        },[]);
+
+        useEffect(()=>{
+            gameHub.start()
+                .then(()=>toast('Connected ✓','success'))
+                .catch(()=>toast('Cannot connect to '+SERVER_URL,'error'))
+                .finally(()=>setLoad(false));
+            const offs=[
+                gameHub.on('GameStateUpdated', s => setState(s)),
+                gameHub.on('Error',       m => toast(m,'error')),
+                gameHub.on('Reconnecting',()  => toast('Reconnecting…','info')),
+                gameHub.on('Reconnected', ()  => toast('Reconnected ✓','success')),
+                gameHub.on('Closed',      ()  => toast('Disconnected','error')),
+            ];
+            return ()=>offs.forEach(f=>f());
+        },[]);
+
+        useEffect(()=>{
+            if (state?.status==='InProgress' && page==='lobby') setPage('game');
+        },[state?.status]);
+
+        const createAndJoin = (gid, name) => {
+            setGid(gid); setPlayer(name);
+            gameHub.call('JoinGame', gid, name)
+                .then(()=>setPage('lobby'))
+                .catch(e=>toast(e.message||'Failed to join','error'));
+        };
+
+        const join = (gid, name) => {
+            setGid(gid); setPlayer(name);
+            gameHub.call('JoinGame', gid, name)
+                .then(()=>setPage('lobby'))
+                .catch(e=>toast(e.message||'Failed to join','error'));
+        };
+
+        const start = () => gameHub.call('StartGame', gameId).catch(e=>toast(e.message||'Could not start','error'));
+        const leave = () => { setState(null); setGid(''); setPage('home'); };
+        const adminLogin = (key) => { setAK(key); setPage('admin'); };
+
+        return (
+            <Ctx.Provider value={{ toast }}>
+                {loading && (
+                    <div className="cover">
+                        <div className="spin" style={{width:28,height:28,borderWidth:3}}></div>
+                        <div style={{fontSize:13,color:'#aaa'}}>Connecting to {SERVER_URL}…</div>
+                    </div>
+                )}
+                {!loading && page==='home'  && <HomePage onCreateAndJoin={createAndJoin} onJoin={join} onAdminLogin={adminLogin}/>}
+                {!loading && page==='lobby' && <LobbyPage gameId={gameId} playerName={player} gameState={state}
+                                                          onStart={start} onLeave={leave} isAdmin={!!adminKey} onAdmin={()=>setPage('admin')}/>}
+                {!loading && page==='game'  && <GamePage gameId={gameId} playerName={player} gameState={state}
+                                                         onLeave={leave} isAdmin={!!adminKey} onAdmin={()=>setPage('admin')}/>}
+                {!loading && page==='admin' && <AdminPage adminKey={adminKey} onBack={()=>setPage(gameId?'game':'home')}/>}
+                <Toasts list={toasts}/>
+            </Ctx.Provider>
+        );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

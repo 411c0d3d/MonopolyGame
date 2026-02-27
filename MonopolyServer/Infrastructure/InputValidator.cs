@@ -9,8 +9,8 @@ namespace MonopolyServer.Infrastructure;
 /// </summary>
 public class InputValidator
 {
-    private static readonly Regex _alphanumericRegex = new Regex(@"^[a-zA-Z0-9\s\-_]+$", RegexOptions.Compiled);
-    private static readonly Regex _gameIdRegex = new Regex(@"^[A-Z0-9]{8}$", RegexOptions.Compiled);
+    private static readonly Regex AlphanumericRegex = new Regex(@"^[a-zA-Z0-9\s\-_]+$", RegexOptions.Compiled);
+    private static readonly Regex GameIdRegex = new Regex(@"^[A-Z0-9]{8}$", RegexOptions.Compiled);
     
     /// <summary>
     /// Validate player name meets requirements.
@@ -32,7 +32,7 @@ public class InputValidator
             return (false, $"Player name cannot exceed {GameConstants.MaxPlayerNameLength} characters");
         }
 
-        if (!_alphanumericRegex.IsMatch(playerName))
+        if (!AlphanumericRegex.IsMatch(playerName))
         {
             return (false, "Player name can only contain letters, numbers, spaces, hyphens, and underscores");
         }
@@ -50,7 +50,7 @@ public class InputValidator
             return (false, "Game ID cannot be empty");
         }
 
-        if (!_gameIdRegex.IsMatch(gameId))
+        if (!GameIdRegex.IsMatch(gameId))
         {
             return (false, "Invalid game ID format");
         }

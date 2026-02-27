@@ -1,41 +1,39 @@
 using MonopolyServer.Game.Constants;
+using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Hubs;
 using MonopolyServer.Game.Services;
 using MonopolyServer.Infrastructure;
 
 namespace MonopolyServer;
 
-/// <summary>
-/// Entry point for the MonopolyServer application. Configures services (SignalR, CORS, game services, logging)
-/// and maps HTTP and SignalR endpoints before starting the web host.
-/// </summary>
 public class Program
 {
     public static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
 
-        // Add services to the container
+        // Add SignalR and CORS for the external client
         builder.Services.AddSignalR();
-
         builder.Services.AddCors(options =>
         {
             options.AddPolicy("AllowAll", policy =>
             {
-                policy
-                    .AllowAnyOrigin()
+                policy.WithOrigins("http://localhost:5299") // Ensure this matches your Client's URL
                     .AllowAnyMethod()
-                    .AllowAnyHeader();
+                    .AllowAnyHeader()
+                    .AllowCredentials();
             });
         });
 
+        // Register Game Services
         builder.Services.AddSingleton<InputValidator>();
-
         builder.Services.AddSingleton<GameRoomManager>();
         builder.Services.AddSingleton<TradeService>();
         builder.Services.AddSingleton<LobbyService>();
 
+        // Register Background Workers
         builder.Services.AddHostedService<GameCleanupService>();
+        builder.Services.AddHostedService<TurnTimerService>();
 
         builder.Services.AddLogging(config =>
         {
@@ -45,39 +43,28 @@ public class Program
 
         var app = builder.Build();
 
-        // Configure the HTTP request pipeline
+        // Server-only Middleware
         app.UseRouting();
-
-        // Enable CORS for SignalR
         app.UseCors("AllowAll");
 
-        // Map SignalR hub
+        // Hub Endpoints
         app.MapHub<GameHub>("/game-hub");
+        app.MapHub<AdminHub>("/admin-hub");
 
-        app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
-            .WithName("Health");
+        // API Endpoints
+        app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
-        app.MapGet("/api/stats", (GameRoomManager roomManager) =>
+        app.MapGet("/api/games",
+            (GameRoomManager rm) =>
+            {
+                return Results.Ok(rm.GetAllGames().Where(g => g.Status != GameStatus.Finished));
+            });
+
+        // Fixed: Added POST endpoint to solve your 405 error
+        app.MapPost("/api/games", (GameRoomManager rm) =>
         {
-            var stats = roomManager.GetStats();
-            return Results.Ok(stats);
-        });
-
-        app.MapGet("/api/games", (GameRoomManager roomManager) =>
-        {
-            var games = roomManager.GetAllGames()
-                .Where(g => g.Status != MonopolyServer.Game.Models.Enums.GameStatus.Finished)
-                .Select(g => new
-                {
-                    gameId = g.GameId,
-                    status = g.Status.ToString(),
-                    playerCount = g.Players.Count,
-                    maxPlayers = GameConstants.MaxPlayers,
-                    createdAt = g.CreatedAt
-                })
-                .ToList();
-
-            return Results.Ok(games);
+            var gameId = rm.CreateGame();
+            return Results.Ok(new { gameId });
         });
 
         app.Run();

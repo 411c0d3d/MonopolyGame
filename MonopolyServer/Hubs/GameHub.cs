@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using MonopolyServer.DTOs;
 using MonopolyServer.Game.Constants;
+using MonopolyServer.Game.Engine;
 using MonopolyServer.Game.Models;
 using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Game.Services;
@@ -99,6 +100,7 @@ public class GameHub : Hub
     /// <summary>
     /// Transitions the game from the lobby to an active state.
     /// </summary>
+// Transitions the game from the lobby to an active state.
     public async Task StartGame(string gameId)
     {
         var game = _roomManager.GetGame(gameId);
@@ -120,11 +122,12 @@ public class GameHub : Hub
             return;
         }
 
+        // Initialize the engine if it doesn't exist yet
         var engine = _roomManager.GetGameEngine(gameId);
         if (engine == null)
         {
-            await Clients.Caller.SendAsync("Error", "Game engine not available");
-            return;
+            engine = new GameEngine(game);
+            _roomManager.SetGameEngine(gameId, engine);
         }
 
         engine.StartGame();

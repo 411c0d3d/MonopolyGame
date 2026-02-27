@@ -1,5 +1,4 @@
-﻿using MonopolyServer.Game.Constants;
-using MonopolyServer.Game.Models.Enums;
+﻿using MonopolyServer.Game.Models.Enums;
 
 namespace MonopolyServer.Game.Models;
 
@@ -58,6 +57,11 @@ public class GameState
     /// Current turn counter.
     /// </summary>
     public int Turn { get; set; }
+    
+    /// <summary>
+    /// UTC timestamp when the current turn started, used for turn timeouts.
+    /// </summary>
+    public DateTime? CurrentTurnStartedAt { get; set; }
 
     /// <summary>
     /// Chronological log of game events for audit and replay.
@@ -83,6 +87,11 @@ public class GameState
     /// Timestamp when the game was finished (ended or all players bankrupt).
     /// </summary>
     public DateTime? FinishedAt { get; set; }
+    
+    /// <summary>
+    /// Identifier of the winning player, if the game has ended with a winner.
+    /// </summary>
+    public string? WinnerId { get; set; }
 
     /// <summary>
     /// Initialize a new GameState for the given game and optional host.
@@ -101,6 +110,8 @@ public class GameState
         LastDiceRoll = 0;
         DoubleRolled = false;
         FinishedAt = null;
+        CurrentTurnStartedAt = null;
+        WinnerId = null;
     }
 
     /// <summary>

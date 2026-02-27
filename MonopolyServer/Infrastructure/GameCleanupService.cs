@@ -138,7 +138,7 @@ public class GameCleanupService : BackgroundService
                     var currentPlayer = game.GetCurrentPlayer();
                     bool wasCurrentPlayer = currentPlayer?.Id == player.Id;
 
-                    engine.BankruptPlayer(player, creditor: null);
+                    engine.ResignPlayer(player.Id);
                     game.LogAction($"{player.Name} was bankrupted due to extended disconnection.");
                     playersRemoved++;
                     stateChanged = true;

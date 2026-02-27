@@ -12,7 +12,7 @@ public class GameEngine
 {
     private readonly GameState _state;
     private readonly CardDeckManager _cardDeckManager;
-    private static readonly Random _random = new Random();
+    private static readonly Random Random = new Random();
 
     public GameEngine(GameState gameState, CardDeckManager? cardDeckManager = null)
     {
@@ -34,6 +34,7 @@ public class GameEngine
         _state.StartedAt = DateTime.UtcNow;
         _state.CurrentPlayerIndex = 0;
         _state.Turn = 1;
+        _state.CurrentTurnStartedAt = DateTime.UtcNow;
 
         var firstPlayer = _state.GetCurrentPlayer();
         if (firstPlayer != null)
@@ -49,8 +50,8 @@ public class GameEngine
     /// </summary>
     public (int Dice1, int Dice2, int Total, bool IsDouble, bool SentToJail) RollDice()
     {
-        int dice1 = _random.Next(1, 7);
-        int dice2 = _random.Next(1, 7);
+        int dice1 = Random.Next(1, 7);
+        int dice2 = Random.Next(1, 7);
         int total = dice1 + dice2;
         bool isDouble = dice1 == dice2;
         bool sentToJail = false;
@@ -272,12 +273,8 @@ public class GameEngine
         }
         else
         {
-            // Payer goes bankrupt
-            int cashAvailable = payer.Cash;
-            payer.DeductCash(cashAvailable);
-            owner.AddCash(cashAvailable);
-            _state.LogAction($"{payer.Name} owed ${amount} but only had ${cashAvailable}. {payer.Name} is bankrupt!");
-            BankruptPlayer(payer, creditor: owner);
+            _state.LogAction($"{payer.Name} owes ${amount} rent to {owner.Name} for {propertyName}.");
+            ForcePayment(payer, amount, owner);
         }
     }
 
@@ -287,16 +284,16 @@ public class GameEngine
     private void HandleTax(Player player, Property space)
     {
         int taxAmount = space.Name.Contains("Income") ? 200 : 100;
-        if (player.DeductCash(taxAmount))
+
+        if (player.Cash >= taxAmount)
         {
+            player.DeductCash(taxAmount);
             _state.LogAction($"{player.Name} paid ${taxAmount} in taxes.");
         }
         else
         {
-            int available = player.Cash;
-            player.DeductCash(available);
-            _state.LogAction($"{player.Name} couldn't afford ${taxAmount} in taxes. {player.Name} is bankrupt!");
-            BankruptPlayer(player, creditor: null);
+            _state.LogAction($"{player.Name} owes ${taxAmount} in taxes.");
+            ForcePayment(player, taxAmount, null);
         }
     }
 
@@ -350,62 +347,6 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Mark a player as bankrupt. If a creditor is provided (rent bankruptcy), all properties,
-    /// remaining cash, and kept cards transfer to that creditor. Otherwise (tax, card-triggered),
-    /// properties return to market and kept cards return to their decks.
-    /// </summary>
-    public void BankruptPlayer(Player player, Player? creditor)
-    {
-        var properties = _state.Board.Spaces.Where(p => p.OwnerId == player.Id).ToList();
-
-        if (creditor != null)
-        {
-            creditor.AddCash(player.Cash);
-
-            foreach (var property in properties)
-            {
-                property.OwnerId = creditor.Id;
-                property.IsMortgaged = false;
-                property.HouseCount = 0;
-                property.HasHotel = false;
-            }
-
-            foreach (var card in player.KeptCards)
-            {
-                creditor.KeptCards.Add(card);
-            }
-
-            _state.LogAction($"{player.Name} is bankrupt. All assets transferred to {creditor.Name}.");
-        }
-        else
-        {
-            foreach (var property in properties)
-            {
-                property.OwnerId = null;
-                property.IsMortgaged = false;
-                property.HouseCount = 0;
-                property.HasHotel = false;
-            }
-
-            foreach (var card in player.KeptCards)
-            {
-                _cardDeckManager.ReturnCardToBottom(card);
-            }
-
-            _state.LogAction($"{player.Name} is bankrupt. All assets returned to the bank.");
-        }
-
-        player.KeptCards.Clear();
-        player.Bankrupt();
-
-        var activePlayers = _state.Players.Where(p => !p.IsBankrupt).ToList();
-        if (activePlayers.Count == 1)
-        {
-            EndGame(activePlayers[0]);
-        }
-    }
-
-    /// <summary>
     /// End the game with a winner.
     /// </summary>
     private void EndGame(Player winner)
@@ -437,6 +378,7 @@ public class GameEngine
         } while (attempts < _state.Players.Count && _state.GetCurrentPlayer()?.IsBankrupt == true);
 
         _state.Turn++;
+        _state.CurrentTurnStartedAt = DateTime.UtcNow;
 
         var nextPlayer = _state.GetCurrentPlayer();
         if (nextPlayer != null)
@@ -521,40 +463,6 @@ public class GameEngine
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// Sell one house from a property back to the bank for half the house cost.
-    /// </summary>
-    public bool SellHouse(Property property)
-    {
-        var owner = _state.GetPlayerById(property.OwnerId!);
-        if (owner == null || property.HouseCount <= 0 || property.HasHotel)
-            return false;
-
-        int refund = property.HouseCost / 2;
-        property.HouseCount--;
-        owner.AddCash(refund);
-        _state.LogAction($"{owner.Name} sold a house on {property.Name} for ${refund}.");
-        return true;
-    }
-
-    /// <summary>
-    /// Sell a hotel from a property back to the bank for half the hotel cost.
-    /// Hotel is removed and the property returns to zero houses.
-    /// </summary>
-    public bool SellHotel(Property property)
-    {
-        var owner = _state.GetPlayerById(property.OwnerId!);
-        if (owner == null || !property.HasHotel)
-            return false;
-
-        int refund = property.HotelCost / 2;
-        property.HasHotel = false;
-        property.HouseCount = 0;
-        owner.AddCash(refund);
-        _state.LogAction($"{owner.Name} sold a hotel on {property.Name} for ${refund}.");
-        return true;
     }
 
     /// <summary>
@@ -689,15 +597,7 @@ public class GameEngine
             case CardType.PayBank:
                 if (card.Amount.HasValue)
                 {
-                    if (player.DeductCash(card.Amount.Value))
-                    {
-                        _state.LogAction($"{player.Name} paid ${card.Amount.Value} to the bank.");
-                    }
-                    else
-                    {
-                        _state.LogAction($"{player.Name} couldn't afford ${card.Amount.Value}. Bankrupt!");
-                        BankruptPlayer(player, creditor: null);
-                    }
+                    ForcePayment(player, card.Amount.Value, null);
                 }
 
                 break;
@@ -789,10 +689,8 @@ public class GameEngine
         }
         else
         {
-            int available = payer.Cash;
-            payer.DeductCash(available);
-            _state.LogAction($"{payer.Name} couldn't afford to pay each player. {payer.Name} is bankrupt!");
-            BankruptPlayer(payer, creditor: null);
+            _state.LogAction($"{payer.Name} owes ${totalOwed} to all players.");
+            ForcePayment(payer, totalOwed, null);
         }
     }
 
@@ -804,22 +702,19 @@ public class GameEngine
     {
         foreach (var otherPlayer in _state.Players.Where(p => p.Id != collector.Id && !p.IsBankrupt).ToList())
         {
-            if (otherPlayer.DeductCash(amount))
+            if (otherPlayer.Cash >= amount)
             {
+                otherPlayer.DeductCash(amount);
                 collector.AddCash(amount);
             }
             else
             {
-                // Other player goes bankrupt
-                int available = otherPlayer.Cash;
-                otherPlayer.DeductCash(available);
-                collector.AddCash(available);
-                _state.LogAction($"{otherPlayer.Name} couldn't pay {collector.Name} and is bankrupt!");
-                BankruptPlayer(otherPlayer, creditor: collector);
+                _state.LogAction($"{otherPlayer.Name} owes ${amount} to {collector.Name}.");
+                ForcePayment(otherPlayer, amount, collector);
             }
         }
 
-        _state.LogAction($"{collector.Name} collected ${amount} from each other player.");
+        _state.LogAction($"{collector.Name} collected from each other player.");
     }
 
     /// <summary>
@@ -841,15 +736,16 @@ public class GameEngine
             return;
         }
 
-        if (player.DeductCash(totalCost))
+        if (player.Cash >= totalCost)
         {
+            player.DeductCash(totalCost);
             _state.LogAction(
                 $"{player.Name} paid ${totalCost} for repairs ({houseCost} per house, {hotelCost} per hotel).");
         }
         else
         {
-            _state.LogAction($"{player.Name} couldn't afford ${totalCost} in repairs. {player.Name} is bankrupt!");
-            BankruptPlayer(player, creditor: null);
+            _state.LogAction($"{player.Name} owes ${totalCost} for repairs.");
+            ForcePayment(player, totalCost, null);
         }
     }
 
@@ -1103,5 +999,250 @@ public class GameEngine
         var property = _state.Board.GetProperty(propertyId);
 
         return property.IsMortgaged ? UnmortgageProperty(property) : MortgageProperty(property);
+    }
+
+    /// <summary>
+    /// Attempt to force a player to pay a debt. If unable, initiate bankruptcy proceedings.
+    /// </summary>
+    public void ForcePayment(Player debtor, int amount, Player? creditor = null)
+    {
+        if (debtor.Cash >= amount)
+        {
+            debtor.DeductCash(amount);
+            creditor?.AddCash(amount);
+            return;
+        }
+
+        _state.LogAction($"{debtor.Name} cannot afford to pay ${amount}. Starting liquidation...");
+
+        int totalAssetValue = CalculateLiquidatableAssets(debtor);
+        int availableAfterLiquidation = debtor.Cash + totalAssetValue;
+
+        if (availableAfterLiquidation >= amount)
+        {
+            InitiateForcedLiquidation(debtor, amount);
+
+            if (debtor.Cash >= amount)
+            {
+                debtor.DeductCash(amount);
+                creditor?.AddCash(amount);
+            }
+            else
+            {
+                DeclareBankruptcy(debtor, creditor);
+            }
+        }
+        else
+        {
+            DeclareBankruptcy(debtor, creditor);
+        }
+    }
+
+    /// <summary>
+    /// Calculate total value of assets that can be liquidated (houses, hotels, mortgages).
+    /// </summary>
+    private int CalculateLiquidatableAssets(Player player)
+    {
+        int total = 0;
+        var properties = _state.Board.GetPropertiesByOwner(player.Id);
+
+        foreach (var property in properties)
+        {
+            if (property.HasHotel)
+            {
+                total += property.HotelCost / 2;
+            }
+
+            total += (property.HouseCount * property.HouseCost) / 2;
+
+            if (!property.IsMortgaged)
+            {
+                total += property.PurchasePrice / 2;
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// Force player to liquidate assets to raise cash. Sells buildings first, then mortgages properties.
+    /// </summary>
+    private void InitiateForcedLiquidation(Player player, int targetAmount)
+    {
+        _state.LogAction($"{player.Name} must liquidate assets to raise ${targetAmount}.");
+
+        var properties = _state.Board.GetPropertiesByOwner(player.Id).ToList();
+
+        foreach (var property in properties.Where(p => p.HasHotel || p.HouseCount > 0))
+        {
+            while (property.HasHotel && player.Cash < targetAmount)
+            {
+                SellHotel(property, forced: true);
+            }
+
+            while (property.HouseCount > 0 && player.Cash < targetAmount)
+            {
+                SellHouse(property, forced: true);
+            }
+        }
+
+        foreach (var property in properties.Where(p => !p.IsMortgaged))
+        {
+            if (player.Cash >= targetAmount)
+            {
+                break;
+            }
+
+            MortgageProperty(property);
+        }
+
+        _state.LogAction($"{player.Name} raised ${player.Cash} through liquidation.");
+    }
+
+    /// <summary>
+    /// Sell a hotel from a property. Returns cash to player at 50% of cost.
+    /// </summary>
+    private void SellHotel(Property property, bool forced = false)
+    {
+        if (!property.HasHotel)
+        {
+            return;
+        }
+
+        var owner = _state.GetPlayerById(property.OwnerId!);
+        if (owner == null)
+        {
+            return;
+        }
+
+        int refund = property.HotelCost / 2;
+        property.HasHotel = false;
+        property.HouseCount = 4;
+        owner.AddCash(refund);
+
+        string message = forced
+            ? $"{owner.Name} was forced to sell hotel on {property.Name} for ${refund}."
+            : $"{owner.Name} sold hotel on {property.Name} for ${refund}.";
+        _state.LogAction(message);
+    }
+
+    /// <summary>
+    /// Sell a house from a property. Returns cash to player at 50% of cost.
+    /// </summary>
+    private void SellHouse(Property property, bool forced = false)
+    {
+        if (property.HouseCount == 0)
+        {
+            return;
+        }
+
+        var owner = _state.GetPlayerById(property.OwnerId!);
+        if (owner == null)
+        {
+            return;
+        }
+
+        int refund = property.HouseCost / 2;
+        property.HouseCount--;
+        owner.AddCash(refund);
+
+        string message = forced
+            ? $"{owner.Name} was forced to sell house on {property.Name} for ${refund}."
+            : $"{owner.Name} sold house on {property.Name} for ${refund}.";
+        _state.LogAction(message);
+    }
+
+    /// <summary>
+    /// Declare player bankrupt and transfer all assets to creditor (or bank).
+    /// </summary>
+    private void DeclareBankruptcy(Player debtor, Player? creditor)
+    {
+        debtor.IsBankrupt = true;
+        debtor.IsConnected = false;
+
+        if (creditor != null)
+        {
+            TransferAssetsToPlayer(debtor, creditor);
+            _state.LogAction($"{debtor.Name} is bankrupt! All assets transferred to {creditor.Name}.");
+        }
+        else
+        {
+            TransferAssetsToBank(debtor);
+            _state.LogAction($"{debtor.Name} is bankrupt! All assets returned to bank.");
+        }
+
+        var activePlayers = _state.Players.Where(p => !p.IsBankrupt).ToList();
+        if (activePlayers.Count == 1)
+        {
+            _state.Status = GameStatus.Finished;
+            _state.FinishedAt = DateTime.UtcNow;
+            _state.WinnerId = activePlayers[0].Id;
+            _state.LogAction($"{activePlayers[0].Name} wins the game!");
+        }
+    }
+
+    /// <summary>
+    /// Transfer all of debtor's assets to creditor player.
+    /// </summary>
+    private void TransferAssetsToPlayer(Player debtor, Player creditor)
+    {
+        creditor.AddCash(debtor.Cash);
+        debtor.Cash = 0;
+
+        var properties = _state.Board.GetPropertiesByOwner(debtor.Id).ToList();
+        foreach (var property in properties)
+        {
+            property.OwnerId = creditor.Id;
+            property.HouseCount = 0;
+            property.HasHotel = false;
+        }
+
+        foreach (var card in debtor.KeptCards.ToList())
+        {
+            debtor.KeptCards.Remove(card);
+            creditor.KeptCards.Add(card);
+        }
+
+        _state.LogAction($"Transferred {properties.Count} properties and ${debtor.Cash} to {creditor.Name}.");
+    }
+
+    /// <summary>
+    /// Return all of debtor's assets to bank (properties become unowned).
+    /// </summary>
+    private void TransferAssetsToBank(Player debtor)
+    {
+        debtor.Cash = 0;
+
+        var properties = _state.Board.GetPropertiesByOwner(debtor.Id).ToList();
+        foreach (var property in properties)
+        {
+            property.OwnerId = null;
+            property.HouseCount = 0;
+            property.HasHotel = false;
+            property.IsMortgaged = false;
+        }
+
+        foreach (var card in debtor.KeptCards.ToList())
+        {
+            _cardDeckManager.ReturnCardToBottom(card);
+            debtor.KeptCards.Remove(card);
+        }
+
+        _state.LogAction($"{properties.Count} properties returned to bank.");
+    }
+
+    /// <summary>
+    /// Manually initiate bankruptcy for a player (voluntary resignation).
+    /// </summary>
+    public void ResignPlayer(string playerId)
+    {
+        var player = _state.GetPlayerById(playerId);
+        if (player == null || player.IsBankrupt)
+        {
+            return;
+        }
+
+        _state.LogAction($"{player.Name} resigned from the game.");
+        DeclareBankruptcy(player, null);
     }
 }
