@@ -14,6 +14,11 @@ public class GameEngine
     private readonly CardDeckManager _cardDeckManager;
     private static readonly Random Random = new Random();
 
+    /// <summary>
+    /// Initialize the game engine with a game state and optional card deck manager.
+    /// </summary>
+    /// <param name="gameState"></param>
+    /// <param name="cardDeckManager"></param>
     public GameEngine(GameState gameState, CardDeckManager? cardDeckManager = null)
     {
         _state = gameState;
@@ -293,14 +298,14 @@ public class GameEngine
         else
         {
             _state.LogAction($"{player.Name} owes ${taxAmount} in taxes.");
-            ForcePayment(player, taxAmount, null);
+            ForcePayment(player, taxAmount);
         }
     }
 
     /// <summary>
     /// Send player to jail. Clear any existing jail turns and move them.
     /// </summary>
-    public void SendPlayerToJail(Player player)
+    private void SendPlayerToJail(Player player)
     {
         player.SendToJail();
         _state.LogAction($"{player.Name} was sent to jail!");
@@ -369,6 +374,8 @@ public class GameEngine
             currentPlayer.ConsecutiveDoubles = 0;
         }
 
+        _state.DoubleRolled = false;
+
         // Skip bankrupt players
         int attempts = 0;
         do
@@ -432,7 +439,7 @@ public class GameEngine
 
         // Check monopoly
         var colorGroup = _state.Board.GetPropertiesByColorGroup(property.ColorGroup!);
-        if (!colorGroup.All(p => p.OwnerId == owner.Id))
+        if (colorGroup.Any(p => p.OwnerId != owner.Id))
             return false;
 
         if (owner.DeductCash(property.HouseCost))
@@ -468,7 +475,7 @@ public class GameEngine
     /// <summary>
     /// Mortgage a property (player gets half the purchase price in cash).
     /// </summary>
-    public bool MortgageProperty(Property property)
+    private bool MortgageProperty(Property property)
     {
         var owner = _state.GetPlayerById(property.OwnerId!);
         if (owner == null || property.IsMortgaged || property.HouseCount > 0 || property.HasHotel)
@@ -483,7 +490,7 @@ public class GameEngine
     /// <summary>
     /// Unmortgage a property. Player pays mortgage value plus 10% interest.
     /// </summary>
-    public bool UnmortgageProperty(Property property)
+    private bool UnmortgageProperty(Property property)
     {
         var owner = _state.GetPlayerById(property.OwnerId!);
         if (owner == null || !property.IsMortgaged)
@@ -597,7 +604,7 @@ public class GameEngine
             case CardType.PayBank:
                 if (card.Amount.HasValue)
                 {
-                    ForcePayment(player, card.Amount.Value, null);
+                    ForcePayment(player, card.Amount.Value);
                 }
 
                 break;
@@ -619,7 +626,7 @@ public class GameEngine
                 break;
 
             case CardType.PayForHouseRepairs:
-                if (card.HouseRepairCost.HasValue && card.HotelRepairCost.HasValue)
+                if (card is { HouseRepairCost: not null, HotelRepairCost: not null })
                 {
                     PayForRepairs(player, card.HouseRepairCost.Value, card.HotelRepairCost.Value);
                 }
@@ -644,7 +651,7 @@ public class GameEngine
         if (description.Contains("Utility"))
         {
             // Find nearest utility: positions 12, 28
-            int[] utilities = { 12, 28 };
+            int[] utilities = [12, 28];
             targetPos = utilities.FirstOrDefault(u => u > currentPos);
             if (targetPos == 0)
                 targetPos = utilities[0];
@@ -652,7 +659,7 @@ public class GameEngine
         else if (description.Contains("Railroad"))
         {
             // Find nearest railroad: positions 5, 15, 25, 35
-            int[] railroads = { 5, 15, 25, 35 };
+            int[] railroads = [5, 15, 25, 35];
             targetPos = railroads.FirstOrDefault(r => r > currentPos);
             if (targetPos == 0)
                 targetPos = railroads[0];
@@ -690,7 +697,7 @@ public class GameEngine
         else
         {
             _state.LogAction($"{payer.Name} owes ${totalOwed} to all players.");
-            ForcePayment(payer, totalOwed, null);
+            ForcePayment(payer, totalOwed);
         }
     }
 
@@ -745,7 +752,7 @@ public class GameEngine
         else
         {
             _state.LogAction($"{player.Name} owes ${totalCost} for repairs.");
-            ForcePayment(player, totalCost, null);
+            ForcePayment(player, totalCost);
         }
     }
 
@@ -1004,7 +1011,7 @@ public class GameEngine
     /// <summary>
     /// Attempt to force a player to pay a debt. If unable, initiate bankruptcy proceedings.
     /// </summary>
-    public void ForcePayment(Player debtor, int amount, Player? creditor = null)
+    private void ForcePayment(Player debtor, int amount, Player? creditor = null)
     {
         if (debtor.Cash >= amount)
         {

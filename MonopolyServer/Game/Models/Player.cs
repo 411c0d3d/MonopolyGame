@@ -88,6 +88,17 @@ public class Player
     public int ConsecutiveDoubles { get; set; }
 
     /// <summary>
+    /// Parameterless constructor used by System.Text.Json during deserialization.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConstructor]
+    public Player()
+    {
+        Id = string.Empty;
+        Name = string.Empty;
+        KeptCards = new List<Card>();
+    }
+
+    /// <summary>
     /// Initializes a new Player with persistent identity and connection state.
     /// </summary>
     /// <param name="id">Unique player identifier.</param>

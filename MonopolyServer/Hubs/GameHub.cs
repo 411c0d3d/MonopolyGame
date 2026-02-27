@@ -135,7 +135,7 @@ public class GameHub : Hub
     }
 
     /// <summary>
-    /// Triggers a dice roll, moves the player, and processes board landing logic.
+    /// Triggers dice roll, moves the player, and processes board landing logic.
     /// </summary>
     public async Task RollDice(string gameId)
     {
@@ -147,6 +147,12 @@ public class GameHub : Hub
             return;
         }
 
+        if (currentPlayer.HasRolledDice && !game!.DoubleRolled)
+        {
+            await Clients.Caller.SendAsync("Error", "You have already rolled this turn.");
+            return;
+        }
+
         var engine = _roomManager.GetGameEngine(gameId);
         if (engine == null)
         {
@@ -154,8 +160,8 @@ public class GameHub : Hub
             return;
         }
 
-        var (dice1, dice2, total, isDouble, sentToJail) = engine.RollDice();
-        
+        var (_, _, total, isDouble, sentToJail) = engine.RollDice();
+
         if (!sentToJail)
         {
             if (currentPlayer.IsInJail)
@@ -191,14 +197,9 @@ public class GameHub : Hub
             }
 
             var property = game.Board.GetProperty(currentPlayer.Position);
-            if (property == null)
-            {
-                await Clients.Caller.SendAsync("Error", "Cannot buy this space");
-                return;
-            }
 
-            if (property.Type != PropertyType.Street && 
-                property.Type != PropertyType.Railroad && 
+            if (property.Type != PropertyType.Street &&
+                property.Type != PropertyType.Railroad &&
                 property.Type != PropertyType.Utility)
             {
                 await Clients.Caller.SendAsync("Error", "This space is not purchasable");
@@ -213,7 +214,7 @@ public class GameHub : Hub
             }
 
             engine.BuyProperty(property);
-            await PersistAndBroadcast(gameId, game!);
+            await PersistAndBroadcast(gameId, game);
         }
         catch (Exception ex)
         {
@@ -252,8 +253,8 @@ public class GameHub : Hub
         }
         else
         {
-            var (dice1, dice2, total, isDouble, sentToJail) = engine.RollDice();
-            
+            var (_, _, total, isDouble, _) = engine.RollDice();
+
             if (isDouble)
             {
                 engine.ReleaseFromJail(currentPlayer, payToBail: false);
@@ -293,11 +294,6 @@ public class GameHub : Hub
         }
 
         var property = game.Board.GetProperty(propertyId);
-        if (property == null)
-        {
-            await Clients.Caller.SendAsync("Error", "Property not found");
-            return;
-        }
 
         if (property.OwnerId != currentPlayer.Id)
         {
@@ -313,7 +309,7 @@ public class GameHub : Hub
         }
 
         engine.ToggleMortgage(propertyId);
-        await PersistAndBroadcast(gameId, game!);
+        await PersistAndBroadcast(gameId, game);
     }
 
     /// <summary>
