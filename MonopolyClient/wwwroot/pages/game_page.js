@@ -1,5 +1,45 @@
-/* globals useState, useEffect, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, React, ReactDOM, signalR */
+/* globals useState, useEffect, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, React, ReactDOM, signalR, TurnTimer */
+
 // components/game_page.js — depends on constants.js, signalr.js, header.js, board.js.
+
+/**
+ * Countdown timer showing seconds remaining in the current turn (90s limit).
+ * @param {{ startedAt: string|null }} props
+ */
+function TurnTimer({startedAt}) {
+    const [remaining, setRemaining] = useState(null);
+
+    useEffect(() => {
+        if (!startedAt) {
+            setRemaining(null);
+            return;
+        }
+        const tick = () => {
+            const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000;
+            setRemaining(Math.max(0, 90 - Math.floor(elapsed)));
+        };
+        tick();
+        const id = setInterval(tick, 1000);
+        return () => clearInterval(id);
+    }, [startedAt]);
+
+    if (remaining === null) {
+        return null;
+    }
+    const urgent = remaining <= 15;
+    const mins = Math.floor(remaining / 60);
+    const secs = String(remaining % 60).padStart(2, '0');
+    return (
+        <span style={{
+            fontSize: 11, fontWeight: 700, fontFamily: 'monospace',
+            color: urgent ? 'var(--red)' : '#aaa',
+            background: urgent ? '#fde8e8' : 'var(--cream)',
+            padding: '2px 7px', borderRadius: 6
+        }}>
+            ⏱ {mins}:{secs}
+        </span>
+    );
+}
 
 /** Pip grid positions per die face value. */
 const DIE_PIPS = {
@@ -127,7 +167,7 @@ function IncomingTradeModal({offer, gameId, onDone}) {
  * Modal for composing and sending a trade proposal to another player.
  * @param {{ target: any, myProps: any[], board: any[], gameId: string, onClose: function }} props
  */
-function ProposeTradeModal({target, myProps, board, gameId, onClose}) {
+function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClose}) {
     const {toast} = useContext(Ctx);
     const [offeredCash, setOfferedCash] = useState('0');
     const [requestedCash, setRequestedCash] = useState('0');
@@ -171,7 +211,15 @@ function ProposeTradeModal({target, myProps, board, gameId, onClose}) {
                             <input className="input" type="number" min="0" value={offeredCash}
                                    onChange={e => setOfferedCash(e.target.value)}/>
                         </div>
-                        <div className="slabel" style={{marginTop: 7}}>Your Properties</div>
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            marginBottom: 9
+                        }}>
+                            <span className="slabel" style={{marginBottom: 0}}>Your Turn</span>
+                            <TurnTimer startedAt={turnStartedAt}/>
+                        </div>
                         {myProps.length === 0 && <div style={{fontSize: 11, color: '#ccc'}}>None</div>}
                         {myProps.map(prop => (
                             <label key={prop.id} style={{
@@ -382,13 +430,13 @@ function BuyPropertyModal({space, boardSpace, me, myProperties, gameId, onClose}
  * Main in-game page with board, player panel, action controls, and event log.
  * @param {{ gameId: string, playerName: string, gameState: any, onLeave: function, isAdmin: boolean, onAdmin: function }} props
  */
-function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
+function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adminKey}) {
     const {toast} = useContext(Ctx);
     const [dice, setDice] = useState([null, null]);
     const [rolling, setRolling] = useState(false);
     const [incomingTrade, setIncomingTrade] = useState(null);
     const [jailModalOpen, setJailModalOpen] = useState(false);
-    const [paused, setPaused] = useState(false);
+    const [paused, setPaused] = useState(gameState?.status === 'Paused');
     const [tradingWith, setTradingWith] = useState(null);
     const [buyModalOpen, setBuyModalOpen] = useState(false);
 
@@ -398,6 +446,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
     const currentPlayer = gameState?.currentPlayer;
     const isMyTurn = currentPlayer?.name === playerName;
     const me = players.find(p => p.name === playerName);
+    const isHost = !!(me && me.id === gameState?.hostId);
     const myProperties = boardSpaces.filter(b => b.ownerId === me?.id);
     const currentSpace = me ? SPACES[me.position] : null;
     const boardSpace = boardSpaces.find(b => b.id === me?.position);
@@ -426,9 +475,11 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                 gameHub.call('JoinGame', gameId, playerName)
                     .catch(() => toast('Failed to rejoin after reconnect', 'error'));
             }),
-            // Notify all players when someone is kicked by an admin.
-            gameHub.on('PlayerKicked', playerName => {
-                toast(`${playerName} was kicked by the admin`, 'info');
+            gameHub.on('PlayerKicked', ({playerName: kickedName}) => {
+                toast(`${kickedName} was removed from the game`, 'info');
+            }),
+            gameHub.on('TurnWarning', ({message}) => {
+                toast(`⏰ ${message}`, 'warning');
             }),
         ];
         return () => unsubscribers.forEach(fn => fn());
@@ -505,6 +556,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                                     {player.name}
                                     {player.name === playerName &&
                                         <span style={{fontSize: 9, color: '#bbb'}}>(you)</span>}
+                                    {player.isBot && <span style={{fontSize: 9, color: '#aaa'}}>🤖</span>}
                                     {player.id === currentPlayer?.id && ' 🎲'}
                                 </div>
                                 <div className="gcash">${player.cash?.toLocaleString()}</div>
@@ -558,7 +610,15 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
 
                     {isMyTurn && !paused && gameState?.status === 'InProgress' && (
                         <div className="card">
-                            <div className="slabel" style={{marginBottom: 9}}>Your Turn</div>
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                marginBottom: 9
+                            }}>
+                                <span className="slabel" style={{marginBottom: 0}}>Your Turn</span>
+                                <TurnTimer startedAt={gameState?.currentTurnStartedAt}/>
+                            </div>
                             {me?.isInJail && (
                                 <button className="btn btn-red btn-full" style={{marginBottom: 9}}
                                         onClick={() => setJailModalOpen(true)}>
@@ -573,10 +633,6 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                                 <button className="btn btn-green" onClick={() => setBuyModalOpen(true)}
                                         disabled={!canBuy}>
                                     🏠 Buy {canBuy ? `($${boardSpace?.purchasePrice || '?'})` : 'Property'}
-                                </button>
-                                <button className="btn btn-ghost" onClick={() => hubCall('DeclineProperty', gameId)}
-                                        disabled={!canBuy}>
-                                    ✕ Decline
                                 </button>
                                 <button className="btn btn-ghost" onClick={() => hubCall('EndTurn', gameId)}
                                         disabled={!me?.hasRolledDice}>
@@ -624,12 +680,6 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                             <div style={{fontSize: 13, color: '#aaa', marginBottom: 12}}>
                                 Waiting for <strong>{currentPlayer?.name}</strong>…
                             </div>
-                            <button
-                                className="btn btn-ghost btn-sm"
-                                onClick={() => hubCall('EndTurn', gameId)}
-                            >
-                                ⏭ End Turn (Skip)
-                            </button>
                         </div>
                     )}
 
@@ -753,6 +803,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                     myProps={myProperties}
                     board={boardSpaces}
                     gameId={gameId}
+                    turnStartedAt={gameState?.currentTurnStartedAt}
                     onClose={() => setTradingWith(null)}
                 />
             )}

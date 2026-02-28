@@ -65,7 +65,8 @@ const signalR = window.signalR;
  *   isBankrupt:boolean,
  *   keptCardCount:number,
  *   hasRolledDice:boolean,
- *   propertyCount:number
+ *   propertyCount:number,
+ *   isBot:boolean
  * }} Player
  */
 
@@ -94,7 +95,8 @@ const signalR = window.signalR;
  *   currentPlayer:Player|null,
  *   turn:number,
  *   eventLog:string[],
- *   doubleRolled?:boolean
+ *   doubleRolled?:boolean,
+ *   currentTurnStartedAt:number,
  * }} GameState
  */
 

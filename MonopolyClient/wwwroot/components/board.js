@@ -153,7 +153,12 @@ function Board({board, players}) {
                         alignItems: 'center',
                         padding: '2px 0'
                     }}>
-                        <div style={{padding: '0 2px', textAlign: 'center'}}>{space.name}</div>
+                        <div style={{
+                            padding: '0 2px',
+                            textAlign: 'center',
+                            wordBreak: 'break-word',
+                            overflowWrap: 'break-word'
+                        }}>{space.name}</div>
                         {hasPrice && (
                             <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>
                                 ${boardSpace?.purchasePrice || space.price || '0'}
@@ -162,17 +167,25 @@ function Board({board, players}) {
                     </div>
                 );
             } else {
-                // top
+                // top — matches bottom layout: name at top, price at bottom, space-between
                 bnameContent = (
                     <div style={{
                         display: 'flex',
                         flexDirection: 'column',
+                        width: '100%',
+                        height: '100%',
                         alignItems: 'center',
-                        justifyContent: 'center'
+                        justifyContent: 'space-between',
+                        padding: '2px 0'
                     }}>
-                        <div style={{padding: '0 2px', textAlign: 'center'}}>{space.name}</div>
+                        <div style={{
+                            padding: '0 2px',
+                            textAlign: 'center',
+                            wordBreak: 'break-word',
+                            overflowWrap: 'break-word'
+                        }}>{space.name}</div>
                         {hasPrice && (
-                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800, marginTop: 2}}>
+                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>
                                 ${boardSpace?.purchasePrice || space.price || '0'}
                             </div>
                         )}
@@ -194,7 +207,7 @@ function Board({board, players}) {
                         <div className="bname-strip" style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)'}}>
                             {space.name}
                         </div>
-                        <div className="bicon" style={{flex: 1}}>
+                        <div className="bicon" style={{flex: 1, transform: 'rotate(-90deg)'}}>
                             {icon}
                         </div>
                     </div>
@@ -209,7 +222,7 @@ function Board({board, players}) {
                         height: '100%',
                         alignItems: 'center'
                     }}>
-                        <div className="bicon" style={{flex: 1}}>
+                        <div className="bicon" style={{flex: 1, transform: 'rotate(90deg)'}}>
                             {icon}
                         </div>
                         <div className="bname-strip" style={{writingMode: 'vertical-rl'}}>
@@ -309,7 +322,12 @@ function Board({board, players}) {
                                 marginBottom: 12
                             }}/>
                         )}
-                        <h2 style={{fontSize: 24, marginBottom: 8}}>{inspectSpace.name.replace('\n', ' ')}</h2>
+                        <h2 style={{fontSize: 24, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 10}}>
+                            {getIcon(inspectSpace) && (
+                                <span style={{fontSize: 26}}>{getIcon(inspectSpace)}</span>
+                            )}
+                            {inspectSpace.name.replace('\n', ' ')}
+                        </h2>
                         <div style={{fontSize: 13, color: '#999', marginBottom: 16}}>
                             {inspectSpace.type} • Position #{inspectSpace.id}
                         </div>

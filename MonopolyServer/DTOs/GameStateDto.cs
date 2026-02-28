@@ -18,6 +18,11 @@ public class GameStateDto
     public string? HostId { get; set; }
 
     /// <summary>
+    /// Display name of the host player, if any.
+    /// </summary>
+    public string? HostName { get; set; }
+
+    /// <summary>
     /// Current game status as a string (e.g., "Waiting", "InProgress", "Ended").
     /// </summary>
     public string Status { get; set; } = string.Empty;

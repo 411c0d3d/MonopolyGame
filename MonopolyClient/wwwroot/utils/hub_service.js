@@ -1,6 +1,6 @@
 /* globals signalR, SERVER_URL */
 
-// utils/signalr.js
+// utils/hub_service.js
 
 class HubService {
     constructor() {
@@ -23,7 +23,10 @@ class HubService {
             'GamePaused',
             'GameResumed',
             'PlayerKicked',
-            'Kicked'
+            'Kicked',
+            'TurnWarning',
+            'GameCreated',
+            'GameRemoved',
         ];
 
         events.forEach(evt => {

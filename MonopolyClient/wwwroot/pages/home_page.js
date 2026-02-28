@@ -13,25 +13,33 @@ function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
     const [activeTab, setActiveTab] = useState('browse');
     const [creating, setCreating] = useState(false);
     const [games, setGames] = useState([]);
-    const [loadingGames, setLoadingGames] = useState(false);
+    const [initialLoading, setInitialLoading] = useState(false);
     const [adminKey, setAdminKey] = useState('');
 
-    const fetchGames = () => {
-        setLoadingGames(true);
+    // Separate initial load (shows spinner) from background poll (silent update)
+    const fetchGames = useCallback((silent = false) => {
+        if (!silent) {
+            setInitialLoading(true);
+        }
         fetch(`${SERVER_URL}/api/games`)
             .then(r => r.json())
             .then(data => {
                 setGames(data);
-                setLoadingGames(false);
+                setInitialLoading(false);
             })
-            .catch(() => setLoadingGames(false));
-    };
+            .catch(() => {
+                setInitialLoading(false);
+            });
+    }, []);
 
     useEffect(() => {
-        if (activeTab === 'browse') {
-            fetchGames();
+        if (activeTab !== 'browse') {
+            return;
         }
-    }, [activeTab]);
+        fetchGames(false);
+        const interval = setInterval(() => fetchGames(true), 5000);
+        return () => clearInterval(interval);
+    }, [activeTab, fetchGames]);
 
     const handleCreate = () => {
         if (!playerName.trim()) {
@@ -116,14 +124,15 @@ function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
                                 marginBottom: 13
                             }}>
                                 <div className="slabel" style={{margin: 0}}>Open Games</div>
-                                <button className="btn btn-sm btn-ghost" onClick={fetchGames}>↻ Refresh</button>
+                                <button className="btn btn-sm btn-ghost" onClick={() => fetchGames(false)}>↻ Refresh
+                                </button>
                             </div>
-                            {loadingGames && (
+                            {initialLoading && (
                                 <div style={{display: 'flex', justifyContent: 'center', padding: 18}}>
                                     <div className="spin"/>
                                 </div>
                             )}
-                            {!loadingGames && games.length === 0 && (
+                            {!initialLoading && games.length === 0 && (
                                 <div style={{color: '#ccc', fontSize: 13, textAlign: 'center', padding: '14px 0'}}>
                                     No open games. Create one!
                                 </div>

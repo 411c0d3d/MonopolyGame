@@ -79,6 +79,11 @@ public class GameHub : Hub
             {
                 player.ConnectionId = Context.ConnectionId;
                 player.IsConnected = true;
+
+                if (string.IsNullOrEmpty(game.HostId) || game.Players.Count == 1)
+                {
+                    game.HostId = player.Id;
+                }
             }
             else if (game.Status == GameStatus.Waiting)
             {
@@ -91,6 +96,11 @@ public class GameHub : Hub
                 player = new Player(Guid.NewGuid().ToString(), playerName)
                     { ConnectionId = Context.ConnectionId, IsConnected = true };
                 game.Players.Add(player);
+
+                if (string.IsNullOrEmpty(game.HostId) || game.Players.Count == 1)
+                {
+                    game.HostId = player.Id;
+                }
             }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, gameId);
@@ -634,7 +644,7 @@ public class GameHub : Hub
     /// </summary>
     private Player? GetCallingPlayer(GameState? game) =>
         game?.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
-    
+
     /// <summary>
     /// Resigns the calling player from the game, triggering bankruptcy and asset transfer to the bank.
     /// </summary>
@@ -675,6 +685,134 @@ public class GameHub : Hub
             engine.NextTurn();
         }
 
+        await PersistAndBroadcast(gameId, game);
+    }
+
+    /// <summary>
+    /// Allows the host to kick a player from the lobby or mark them bankrupt mid-game.
+    /// </summary>
+    public async Task KickPlayer(string gameId, string playerId)
+    {
+        var game = _roomManager.GetGame(gameId);
+        if (game == null)
+        {
+            throw new HubException("Game not found");
+        }
+
+        var caller = GetCallingPlayer(game);
+        if (caller == null || caller.Id != game.HostId)
+        {
+            throw new HubException("Only the host can kick players");
+        }
+
+        var target = game.Players.FirstOrDefault(p => p.Id == playerId)
+                     ?? throw new HubException("Player not found");
+
+        if (target.Id == caller.Id)
+        {
+            throw new HubException("Host cannot kick themselves");
+        }
+
+        if (game.Status == GameStatus.Waiting)
+        {
+            game.Players.Remove(target);
+            game.LogAction($"{target.Name} was kicked by the host.");
+        }
+        else if (game.Status == GameStatus.InProgress)
+        {
+            var engine = _roomManager.GetGameEngine(gameId);
+            if (engine != null)
+            {
+                engine.ResignPlayer(target.Id);
+                if (game.GetCurrentPlayer()?.Id == target.Id || game.GetCurrentPlayer() == null)
+                {
+                    engine.NextTurn();
+                }
+            }
+            else
+            {
+                target.IsBankrupt = true;
+                target.IsConnected = false;
+            }
+
+            game.LogAction($"{target.Name} was removed by the host.");
+
+            var activePlayers = game.Players.Where(p => !p.IsBankrupt).ToList();
+            if (activePlayers.Count <= 1)
+            {
+                game.Status = GameStatus.Finished;
+                game.FinishedAt = DateTime.UtcNow;
+                game.WinnerId = activePlayers.FirstOrDefault()?.Id;
+            }
+        }
+        else
+        {
+            throw new HubException("Cannot kick players in this game state");
+        }
+
+        if (target.ConnectionId != null)
+        {
+            await Clients.Client(target.ConnectionId).SendAsync("Kicked", "You were removed by the host");
+        }
+
+        _logger.LogInformation("Host {HostName} kicked player {PlayerName} from game {GameId}", caller.Name,
+            target.Name, gameId);
+        await PersistAndBroadcast(gameId, game);
+    }
+
+    /// <summary>
+    /// Adds bots to a waiting game. Caller must be the host; no admin key required.
+    /// </summary>
+    public async Task AddBots(string gameId, int count = 1)
+    {
+        var game = _roomManager.GetGame(gameId);
+        if (game == null)
+        {
+            throw new HubException("Game not found");
+        }
+
+        var caller = GetCallingPlayer(game);
+        if (caller == null || caller.Id != game.HostId)
+        {
+            throw new HubException("Only the host can add bots");
+        }
+
+        if (game.Status != GameStatus.Waiting)
+        {
+            throw new HubException("Bots can only be added while the game is in the lobby");
+        }
+
+        int available = GameConstants.MaxPlayers - game.Players.Count;
+        if (available <= 0)
+        {
+            throw new HubException("Lobby is full");
+        }
+
+        int toAdd = Math.Min(Math.Max(count, 1), available);
+
+        int nextBotNumber = game.Players
+            .Where(p => p.IsBot)
+            .Select(p =>
+            {
+                var parts = p.Name.Split(' ');
+                return parts.Length == 2 && int.TryParse(parts[1], out int n) ? n : 0;
+            })
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+
+        for (int i = 0; i < toAdd; i++)
+        {
+            var botName = $"Bot {nextBotNumber++}";
+            game.Players.Add(new Player(Guid.NewGuid().ToString(), botName)
+            {
+                IsBot = true,
+                IsConnected = true,
+                ConnectionId = null
+            });
+            game.LogAction($"{botName} joined the game as a bot.");
+        }
+
+        _logger.LogInformation("Host added {Count} bot(s) to game {GameId}", toAdd, gameId);
         await PersistAndBroadcast(gameId, game);
     }
 }

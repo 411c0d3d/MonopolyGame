@@ -11,85 +11,135 @@ function AdminPage({adminKey, onBack}) {
     const [games, setGames] = useState([]);
     const [selectedId, setSelectedId] = useState(null);
     const [gameDetail, setGameDetail] = useState(null);
-    const [loading, setLoading] = useState(false);
-    const [adminConn, setAdminConn] = useState(null);
+    const [initialLoading, setInitialLoading] = useState(false);
+    const [detailLoading, setDetailLoading] = useState(false);
+    const adminConnRef = React.useRef(null);
+    const selectedIdRef = React.useRef(null);
+    const [botCount, setBotCount] = useState(1);
 
-    const fetchGames = () => {
-        setLoading(true);
+    // Mirror of home_page: silent=true skips the spinner for background polls
+    const fetchGames = useCallback((silent = false) => {
+        if (!silent) { setInitialLoading(true); }
         fetch(`${SERVER_URL}/api/games`)
             .then(r => r.json())
-            .then(data => {
-                setGames(data);
-                setLoading(false);
-            })
-            .catch(() => {
-                toast('Could not load games', 'error');
-                setLoading(false);
-            });
-    };
+            .then(data => { setGames(data); setInitialLoading(false); })
+            .catch(() => { setInitialLoading(false); });
+    }, []);
+
+    const refreshDetail = useCallback((silent = false) => {
+        const gid = selectedIdRef.current;
+        if (!gid) { return; }
+        const conn = adminConnRef.current;
+        if (!conn || conn.state !== signalR.HubConnectionState.Connected) { return; }
+        if (!silent) { setDetailLoading(true); }
+        conn.invoke('GetGameDetails', gid, adminKey)
+            .catch(() => {})
+            .finally(() => { if (!silent) { setDetailLoading(false); } });
+    }, [adminKey]);
 
     useEffect(() => {
-        fetchGames();
+        selectedIdRef.current = selectedId;
+    }, [selectedId]);
 
+    // Poll games list every 5s, same cadence as home page browse tab
+    useEffect(() => {
+        fetchGames(false);
+        const interval = setInterval(() => fetchGames(true), 5000);
+        return () => clearInterval(interval);
+    }, [fetchGames]);
+
+    // Poll selected game detail every 5s when a game is selected
+    useEffect(() => {
+        if (!selectedId) { return; }
+        const interval = setInterval(() => refreshDetail(true), 5000);
+        return () => clearInterval(interval);
+    }, [selectedId, refreshDetail]);
+
+    useEffect(() => {
         const conn = new signalR.HubConnectionBuilder()
             .withUrl(`${SERVER_URL}/admin-hub`)
             .withAutomaticReconnect()
             .configureLogging(signalR.LogLevel.Warning)
             .build();
 
-        conn.on('GameDetails', detail => setGameDetail(detail));
+        conn.on('GameDetails', detail => {
+            setGameDetail(detail);
+            setDetailLoading(false);
+        });
         conn.on('Error', msg => toast(msg, 'error'));
-        conn.on('GameForceEnded', () => {
-            toast('Game ended', 'success');
-            setSelectedId(null);
-            setGameDetail(null);
-            fetchGames();
-        });
-        conn.on('GamePaused', () => {
-            toast('Game paused', 'success');
-            fetchGames();
-        });
-        conn.on('GameResumed', () => {
-            toast('Game resumed', 'success');
-            fetchGames();
-        });
-        conn.on('PlayerKicked', () => toast('Player kicked', 'success'));
 
         conn.start().catch(() => toast('Admin hub failed to connect', 'error'));
-        setAdminConn(conn);
+        adminConnRef.current = conn;
 
         return () => conn.stop();
     }, []);
 
-    /**
-     * Invokes an admin hub method with the stored admin key.
-     * @param {string} method
-     * @param {string} gid
-     * @param {...any} rest
-     */
-    const adminAction = (method, gid, ...rest) => {
-        if (!adminConn) {
+    /** Invokes an admin hub method; returns the promise so callers can chain .then(). */
+    const adminInvoke = (method, ...args) => {
+        const conn = adminConnRef.current;
+        if (!conn || conn.state !== signalR.HubConnectionState.Connected) {
             toast('Admin hub not connected', 'error');
-            return;
+            return Promise.reject(new Error('Not connected'));
         }
-        adminConn.invoke(method, gid, adminKey, ...rest)
-            .catch(e => toast(e.message || 'Admin action failed', 'error'));
+        return conn.invoke(method, ...args)
+            .catch(e => {
+                toast(e.message || 'Admin action failed', 'error');
+                throw e;
+            });
     };
 
     const selectGame = (gid) => {
         setSelectedId(gid);
+        selectedIdRef.current = gid;
         setGameDetail(null);
-        adminAction('GetGameDetails', gid);
+        setDetailLoading(true);
+        adminInvoke('GetGameDetails', gid, adminKey).catch(() => {});
     };
 
-    const statusBadgeClass = (status) => {
-        return {
-            Waiting: 'bg-yellow',
-            InProgress: 'bg-green',
-            Paused: 'bg-red',
-            Finished: 'bg-gray'
-        }[status] || 'bg-gray';
+    const handlePause = () => {
+        adminInvoke('PauseGame', selectedId, adminKey)
+            .then(() => { toast('Game paused', 'success'); fetchGames(true); refreshDetail(false); })
+            .catch(() => {});
     };
+
+    const handleResume = () => {
+        adminInvoke('ResumeGame', selectedId, adminKey)
+            .then(() => { toast('Game resumed', 'success'); fetchGames(true); refreshDetail(false); })
+            .catch(() => {});
+    };
+
+    const handleForceEnd = () => {
+        if (!confirm('Force end this game?')) { return; }
+        adminInvoke('ForceEndGame', selectedId, adminKey)
+            .then(() => {
+                toast('Game ended', 'success');
+                setSelectedId(null);
+                setGameDetail(null);
+                fetchGames(false);
+            })
+            .catch(() => {});
+    };
+
+    const handleKick = (player) => {
+        if (!confirm(`Kick ${player.name}?`)) { return; }
+        adminInvoke('KickPlayer', selectedId, player.id, adminKey)
+            .then(() => { toast('Player kicked', 'success'); refreshDetail(false); })
+            .catch(() => {});
+    };
+
+    const handleAddBots = () => {
+        if (botCount < 1) { return; }
+        adminInvoke('AddBotToGame', selectedId, adminKey, botCount)
+            .then(() => { toast(`${botCount} bot(s) added`, 'success'); refreshDetail(false); fetchGames(true); })
+            .catch(() => {});
+    };
+
+    const statusBadgeClass = (status) => ({
+        Waiting: 'bg-yellow',
+        InProgress: 'bg-green',
+        Paused: 'bg-red',
+        Finished: 'bg-gray'
+    })[status] || 'bg-gray';
 
     return (
         <div className="page-enter">
@@ -100,13 +150,13 @@ function AdminPage({adminKey, onBack}) {
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
-                        marginBottom: 13
+                        marginBottom: 11
                     }}>
                         <div className="slabel" style={{margin: 0}}>All Games</div>
-                        <button className="btn btn-sm btn-ghost" onClick={fetchGames}>↻</button>
+                        <button className="btn btn-sm btn-ghost" onClick={() => fetchGames(false)}>↻</button>
                     </div>
-                    {loading && <div className="spin" style={{margin: '18px auto'}}/>}
-                    {!loading && games.length === 0 && (
+                    {initialLoading && <div className="spin" style={{margin: '18px auto'}}/>}
+                    {!initialLoading && games.length === 0 && (
                         <div style={{fontSize: 11, color: '#ccc'}}>No games.</div>
                     )}
                     {games.map(game => (
@@ -143,32 +193,18 @@ function AdminPage({adminKey, onBack}) {
                                     <code style={{letterSpacing: 2}}>{selectedId}</code>
                                 </h2>
                                 {gameDetail && (
-                                    <span
-                                        className={`badge ${statusBadgeClass(gameDetail.status)}`}>{gameDetail.status}</span>
+                                    <span className={`badge ${statusBadgeClass(gameDetail.status)}`}>{gameDetail.status}</span>
                                 )}
                             </div>
 
                             <div style={{display: 'flex', gap: 9, flexWrap: 'wrap', marginBottom: 22}}>
-                                <button className="btn btn-ghost btn-sm" onClick={() => {
-                                    setGameDetail(null);
-                                    adminAction('GetGameDetails', selectedId);
-                                }}>↻ Refresh
-                                </button>
-                                <button className="btn btn-warn btn-sm"
-                                        onClick={() => adminAction('PauseGame', selectedId)}>⏸ Pause
-                                </button>
-                                <button className="btn btn-green btn-sm"
-                                        onClick={() => adminAction('ResumeGame', selectedId)}>▶ Resume
-                                </button>
-                                <button className="btn btn-red btn-sm" onClick={() => {
-                                    if (confirm('Force end this game?')) {
-                                        adminAction('ForceEndGame', selectedId);
-                                    }
-                                }}>⛔ Force End
-                                </button>
+                                <button className="btn btn-ghost btn-sm" onClick={() => refreshDetail(false)}>↻ Refresh</button>
+                                <button className="btn btn-warn btn-sm" onClick={handlePause}>⏸ Pause</button>
+                                <button className="btn btn-green btn-sm" onClick={handleResume}>▶ Resume</button>
+                                <button className="btn btn-red btn-sm" onClick={handleForceEnd}>⛔ Force End</button>
                             </div>
 
-                            {!gameDetail && (
+                            {detailLoading && !gameDetail && (
                                 <div style={{display: 'flex', gap: 9, alignItems: 'center', color: '#bbb'}}>
                                     <div className="spin"/>
                                     Loading…
@@ -177,6 +213,23 @@ function AdminPage({adminKey, onBack}) {
 
                             {gameDetail && (
                                 <>
+                                    {gameDetail.status !== 'Finished' && (
+                                        <div className="card" style={{marginBottom: 14}}>
+                                            <div className="slabel">🤖 Add Bots</div>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: 9}}>
+                                                <button className="btn btn-ghost btn-sm" style={{padding: '3px 10px', fontSize: 15}}
+                                                        onClick={() => setBotCount(c => Math.max(1, c - 1))}>−</button>
+                                                <span style={{fontSize: 13, fontWeight: 700, minWidth: 22, textAlign: 'center'}}>{botCount}</span>
+                                                <button className="btn btn-ghost btn-sm" style={{padding: '3px 10px', fontSize: 15}}
+                                                        onClick={() => setBotCount(c => Math.min(7, c + 1))}>+</button>
+                                                <span style={{fontSize: 11, color: '#aaa'}}>bot{botCount !== 1 ? 's' : ''}</span>
+                                                <button className="btn btn-ink btn-sm" style={{marginLeft: 'auto'}} onClick={handleAddBots}>
+                                                    + Add
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     <div className="card" style={{marginBottom: 14}}>
                                         <div className="slabel">Stats</div>
                                         <div style={{display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10}}>
@@ -202,11 +255,8 @@ function AdminPage({adminKey, onBack}) {
                                         <div className="slabel">Players</div>
                                         {(gameDetail.players || []).map((player, i) => (
                                             <div key={player.id} style={{
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                gap: 9,
-                                                padding: '9px 0',
-                                                borderBottom: '1px solid var(--border)'
+                                                display: 'flex', alignItems: 'center', gap: 9,
+                                                padding: '9px 0', borderBottom: '1px solid var(--border)'
                                             }}>
                                                 <div className="pav" style={{
                                                     background: COLORS[i % COLORS.length],
@@ -229,14 +279,8 @@ function AdminPage({adminKey, onBack}) {
                                                 <div style={{display: 'flex', gap: 5, alignItems: 'center'}}>
                                                     <span className="badge bg-gray">{player.propertyCount} props</span>
                                                     {!player.isBankrupt && (
-                                                        <button
-                                                            className="btn btn-red btn-sm"
-                                                            onClick={() => {
-                                                                if (confirm(`Kick ${player.name}?`)) {
-                                                                    adminAction('KickPlayer', selectedId, player.id);
-                                                                }
-                                                            }}
-                                                        >
+                                                        <button className="btn btn-red btn-sm"
+                                                                onClick={() => handleKick(player)}>
                                                             Kick
                                                         </button>
                                                     )}

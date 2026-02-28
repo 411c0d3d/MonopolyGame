@@ -4,21 +4,66 @@
 
 /**
  * Pre-game lobby showing players, settings, and the start button.
- * @param {{ gameId: string, playerName: string, gameState: any, onStart: function, onLeave: function, isAdmin: boolean, onAdmin: function }} props
+ * Host can add bots via admin key.
+ * @param {{ gameId: string, playerName: string, gameState: any, onStart: function, onLeave: function, isCreator: boolean, isAdmin: boolean, onAdmin: function }} props
  */
-function LobbyPage({gameId, playerName, gameState, onStart, onLeave, isAdmin, onAdmin}) {
+function LobbyPage({gameId, playerName, gameState: initialGameState, onStart, onLeave, isCreator, isAdmin, onAdmin}) {
+    const {toast} = useContext(Ctx);
+    // Maintain local state so we stay in sync with hub updates independent of parent re-renders
+    const [gameState, setGameState] = useState(initialGameState);
     const [copied, setCopied] = useState(false);
+    const [botCount, setBotCount] = useState(1);
+    const [addingBots, setAddingBots] = useState(false);
+
+    // Keep local state in sync when parent passes a fresh snapshot (e.g. on initial load)
+    useEffect(() => {
+        if (initialGameState) {
+            setGameState(initialGameState);
+        }
+    }, [initialGameState]);
+
+    // Subscribe directly to hub so lobby always reflects latest player list
+    useEffect(() => {
+        const unsub = gameHub.on('GameStateUpdated', state => {
+            if (state.gameId === gameId) {
+                setGameState(state);
+            }
+        });
+        return unsub;
+    }, [gameId]);
 
     const players = gameState?.players || [];
     const hostId = gameState?.hostId;
     const me = players.find(p => p.name === playerName);
-    const isHost = me && (me.id === hostId || players[0]?.name === playerName);
+    const isHost = isCreator || !!(me && me.id === hostId);
 
     const handleCopy = () => {
         navigator.clipboard.writeText(gameId).then(() => {
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         });
+    };
+
+    /** Kicks a non-host player; host identity verified server-side by connection ID. */
+    const handleKick = (player) => {
+        if (!confirm(`Kick ${player.name}?`)) { return; }
+        gameHub.call('KickPlayer', gameId, player.id)
+            .catch(e => toast(e.message || 'Failed to kick player', 'error'));
+    };
+
+    /** Asks the server to add bots; host identity is verified server-side by connection ID. */
+    const handleAddBots = () => {
+        const available = 8 - players.length;
+        if (available <= 0) {
+            toast('Lobby is full', 'error');
+            return;
+        }
+
+        setAddingBots(true);
+        gameHub.call('AddBots', gameId, Math.min(botCount, available))
+            .then(() => toast(`${Math.min(botCount, available)} bot(s) added`, 'success'))
+            .catch(e => toast(e.message || 'Failed to add bots', 'error'))
+            .finally(() => setAddingBots(false));
     };
 
     return (
@@ -58,12 +103,21 @@ function LobbyPage({gameId, playerName, gameState, onStart, onLeave, isAdmin, on
                                 <div style={{flex: 1}}>
                                     <div style={{fontWeight: 600, fontSize: 13}}>{player.name}</div>
                                     <div style={{fontSize: 11, color: '#aaa'}}>
-                                        {player.isConnected ? 'Connected' : 'Disconnected'}
+                                        {player.isBot ? '🤖 Bot' : player.isConnected ? 'Connected' : 'Disconnected'}
                                     </div>
                                 </div>
                                 {player.id === hostId && <span className="badge bg-yellow">👑 Host</span>}
-                                {player.name === playerName && player.id !== hostId && (
+                                {player.name === playerName && (
                                     <span className="badge bg-blue">You</span>
+                                )}
+                                {isHost && player.id !== hostId && (
+                                    <button
+                                        className="btn btn-ghost btn-sm"
+                                        style={{fontSize: 11, padding: '2px 8px', color: '#e55', borderColor: '#e55'}}
+                                        onClick={() => handleKick(player)}
+                                    >
+                                        Kick
+                                    </button>
                                 )}
                             </div>
                         ))}
@@ -97,9 +151,42 @@ function LobbyPage({gameId, playerName, gameState, onStart, onLeave, isAdmin, on
                         ))}
                     </div>
 
+                    {/* Bot panel — host only */}
+                    {isHost && players.length < 8 && (
+                        <div className="card" style={{marginBottom: 11}}>
+                            <div style={{fontSize: 12, fontWeight: 700, marginBottom: 10, color: '#777'}}>🤖 Add Bots
+                            </div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10}}>
+                                <button className="btn btn-ghost btn-sm" style={{padding: '3px 10px', fontSize: 15}}
+                                        onClick={() => setBotCount(c => Math.max(1, c - 1))}>−
+                                </button>
+                                <span style={{fontSize: 13, fontWeight: 700, flex: 1, textAlign: 'center'}}>
+                                    {botCount} bot{botCount !== 1 ? 's' : ''}
+                                </span>
+                                <button className="btn btn-ghost btn-sm" style={{padding: '3px 10px', fontSize: 15}}
+                                        onClick={() => setBotCount(c => Math.min(8 - players.length, c + 1))}>+
+                                </button>
+                            </div>
+                            <button
+                                className="btn btn-ghost btn-full btn-sm"
+                                onClick={handleAddBots}
+                                disabled={addingBots}
+                            >
+                                {addingBots
+                                    ? <span style={{display: 'flex', alignItems: 'center', gap: 6}}><div
+                                        className="spin"/>Adding…</span>
+                                    : '+ Add Bots'
+                                }
+                            </button>
+                        </div>
+                    )}
+
                     {isHost ? (
-                        <button className="btn btn-green btn-full btn-lg" onClick={onStart}
-                                disabled={players.length < 2}>
+                        <button
+                            className="btn btn-green btn-full btn-lg"
+                            onClick={onStart}
+                            disabled={players.length < 2}
+                        >
                             {players.length < 2
                                 ? `Need ${2 - players.length} more player${players.length === 1 ? '' : 's'}`
                                 : '▶ Start Game'

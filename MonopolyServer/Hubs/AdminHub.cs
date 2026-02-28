@@ -11,14 +11,15 @@ namespace MonopolyServer.Hubs;
 /// <summary>
 /// Admin hub for server management and game control operations.
 /// Provides endpoints for force-ending games, kicking players, and pausing/resuming games.
+/// All game-facing broadcasts go through the context of GameHub so lobby/game clients receive them.
 /// </summary>
 public class AdminHub : Hub
 {
     private readonly GameRoomManager _roomManager;
     private readonly IConfiguration _configuration;
     private readonly BotTurnOrchestrator _botTurnOrchestrator;
+    private readonly IHubContext<GameHub> _gameHubContext;
     private readonly ILogger<AdminHub> _logger;
-
 
     /// <summary>
     /// Constructor with dependency injection for game room management, logging, and configuration access.
@@ -27,20 +28,23 @@ public class AdminHub : Hub
     /// <param name="botTurnOrchestrator">Orchestrates and schedules bot turns for automated players in active games.</param>
     /// <param name="logger">Logger used to record hub operations, warnings, and admin actions.</param>
     /// <param name="configuration">Provides access to application configuration values (e.g., the admin key).</param>
+    /// <param name="gameHubContext">The Game Hub Context.</param>
     public AdminHub(
         GameRoomManager roomManager,
         BotTurnOrchestrator botTurnOrchestrator,
+        IHubContext<GameHub> gameHubContext,
         ILogger<AdminHub> logger,
         IConfiguration configuration)
     {
         _roomManager = roomManager;
         _botTurnOrchestrator = botTurnOrchestrator;
+        _gameHubContext = gameHubContext;
         _logger = logger;
         _configuration = configuration;
     }
 
     /// <summary>
-    /// Force end a game immediately. Marks game as finished without determining winner.
+    /// Force end a game immediately. Marks game as finished without determining a winner.
     /// </summary>
     public async Task ForceEndGame(string gameId, string adminKey)
     {
@@ -62,13 +66,14 @@ public class AdminHub : Hub
         game.LogAction("Game was force-ended by admin.");
 
         await _roomManager.SaveGameAsync(gameId);
-        await Clients.Group(gameId).SendAsync("GameForceEnded", new { gameId, reason = "Admin action" });
+        await _gameHubContext.Clients.Group(gameId)
+            .SendAsync("GameForceEnded", new { gameId, reason = "Admin action" });
 
-        _logger.LogWarning($"Admin force-ended game {gameId}");
+        _logger.LogWarning("Admin force-ended game {GameId}", gameId);
     }
 
     /// <summary>
-    /// Kick a player from a game. Removes player if game is waiting, marks bankrupt if in progress.
+    /// Kick a player from a game. Removes player if waiting, marks bankrupt if in progress.
     /// </summary>
     public async Task KickPlayer(string gameId, string playerId, string adminKey)
     {
@@ -113,14 +118,16 @@ public class AdminHub : Hub
         }
 
         await _roomManager.SaveGameAsync(gameId);
-        await Clients.Group(gameId).SendAsync("PlayerKicked", new { playerId, playerName = player.Name });
+        await _gameHubContext.Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
+        await _gameHubContext.Clients.Group(gameId)
+            .SendAsync("PlayerKicked", new { playerId, playerName = player.Name });
 
         if (player.ConnectionId != null)
         {
-            await Clients.Client(player.ConnectionId).SendAsync("Kicked", "You were removed by admin");
+            await _gameHubContext.Clients.Client(player.ConnectionId).SendAsync("Kicked", "You were removed by admin");
         }
 
-        _logger.LogWarning($"Admin kicked player {player.Name} from game {gameId}");
+        _logger.LogWarning("Admin kicked player {PlayerName} from game {GameId}", player.Name, gameId);
     }
 
     /// <summary>
@@ -151,9 +158,10 @@ public class AdminHub : Hub
         game.LogAction("Game paused by admin.");
 
         await _roomManager.SaveGameAsync(gameId);
-        await Clients.Group(gameId).SendAsync("GamePaused");
+        await _gameHubContext.Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
+        await _gameHubContext.Clients.Group(gameId).SendAsync("GamePaused");
 
-        _logger.LogInformation($"Admin paused game {gameId}");
+        _logger.LogInformation("Admin paused game {GameId}", gameId);
     }
 
     /// <summary>
@@ -184,9 +192,10 @@ public class AdminHub : Hub
         game.LogAction("Game resumed by admin.");
 
         await _roomManager.SaveGameAsync(gameId);
-        await Clients.Group(gameId).SendAsync("GameResumed");
+        await _gameHubContext.Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
+        await _gameHubContext.Clients.Group(gameId).SendAsync("GameResumed");
 
-        _logger.LogInformation($"Admin resumed game {gameId}");
+        _logger.LogInformation("Admin resumed game {GameId}", gameId);
     }
 
     /// <summary>
@@ -244,7 +253,6 @@ public class AdminHub : Hub
     /// <summary>
     /// Adds one or more bot players to a waiting or in-progress game.
     /// Bots are named "Bot 1", "Bot 2", etc., continuing from the highest existing bot number.
-    /// If the game is already in progress the first bot turn is scheduled immediately when it is their turn.
     /// </summary>
     public async Task AddBotToGame(string gameId, string adminKey, int count = 1)
     {
@@ -298,23 +306,22 @@ public class AdminHub : Hub
         for (int i = 0; i < toAdd; i++)
         {
             var botName = $"Bot {nextBotNumber++}";
-            var bot = new Player(Guid.NewGuid().ToString(), botName)
+            game.Players.Add(new Player(Guid.NewGuid().ToString(), botName)
             {
                 IsBot = true,
                 IsConnected = true,
-                ConnectionId = null // Bots have no SignalR connection
-            };
-
-            game.Players.Add(bot);
+                ConnectionId = null
+            });
             game.LogAction($"{botName} joined the game as a bot.");
             addedNames.Add(botName);
         }
 
         await _roomManager.SaveGameAsync(gameId);
-        await Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
 
-        _logger.LogInformation(
-            "Admin added {Count} bot(s) to game {GameId}: {Names}",
+        // Broadcast through GameHub context so lobby clients receive the update
+        await _gameHubContext.Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
+
+        _logger.LogInformation("Admin added {Count} bot(s) to game {GameId}: {Names}",
             toAdd, gameId, string.Join(", ", addedNames));
 
         // If game is already running, and it happens to be a bot's turn, kick it off
@@ -325,7 +332,7 @@ public class AdminHub : Hub
     }
 
     /// <summary>
-    /// Validate admin key from configuration.
+    /// Validates the admin key against configuration.
     /// </summary>
     private bool ValidateAdminKey(string adminKey)
     {

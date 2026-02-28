@@ -1,5 +1,4 @@
 using MonopolyServer.Bot;
-using MonopolyServer.Game.Constants;
 using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Hubs;
 using MonopolyServer.Game.Services;
@@ -63,7 +62,7 @@ public class Program
                 return Results.Ok(rm.GetAllGames().Where(g => g.Status != GameStatus.Finished));
             });
 
-        // Fixed: Added POST endpoint to solve your 405 error
+        // Added POST endpoint to solve your 405 error
         app.MapPost("/api/games", (GameRoomManager rm) =>
         {
             var gameId = rm.CreateGame();

@@ -11,6 +11,7 @@ public static class GameStateMapper
     {
         GameId = game.GameId,
         HostId = game.HostId,
+        HostName = game.HostId != null ? game.Players.FirstOrDefault(p => p.Id == game.HostId)?.Name : null,
         Status = game.Status.ToString(),
         Turn = game.Turn,
         CurrentPlayerIndex = game.CurrentPlayerIndex,

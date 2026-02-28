@@ -19,6 +19,7 @@ function App() {
     const [loading, setLoading] = useState(true);
     const [toasts, setToasts] = useState([]);
     const [adminKey, setAdminKey] = useState('');
+    const [isCreator, setIsCreator] = useState(false);
 
     const toast = useCallback((msg, type = 'info') => {
         const id = Date.now() + Math.random();
@@ -28,7 +29,7 @@ function App() {
 
     useEffect(() => {
         gameHub.start()
-            .then(() => toast('Connected ✓', 'success'))
+            .then(() => toast('Connected', 'success'))
             .catch(() => toast(`Cannot connect to ${SERVER_URL}`, 'error'))
             .finally(() => setLoading(false));
 
@@ -36,8 +37,9 @@ function App() {
             gameHub.on('GameStateUpdated', state => setGameState(state)),
             gameHub.on('Error', msg => toast(msg, 'error')),
             gameHub.on('Reconnecting', () => toast('Reconnecting…', 'info')),
-            gameHub.on('Reconnected', () => toast('Reconnected ✓', 'success')),
+            gameHub.on('Reconnected', () => toast('Reconnected', 'success')),
             gameHub.on('Closed', () => toast('Disconnected', 'error')),
+            gameHub.on('TurnWarning', ({ message }) => toast(`⏰ ${message}`, 'warning')),
         ];
 
         return () => unsubscribers.forEach(fn => fn());
@@ -49,9 +51,11 @@ function App() {
         }
     }, [gameState?.status]);
 
-    const handleCreateAndJoin = (gid, name) => {
+    const handleCreateAndJoin = (gid, name, botKey) => {
         setGameId(gid);
         setPlayerName(name);
+        setIsCreator(true);
+        if (botKey && !adminKey) { setAdminKey(botKey); }
         gameHub.call('JoinGame', gid, name)
             .then(() => setPage('lobby'))
             .catch(e => toast(e.message || 'Failed to join', 'error'));
@@ -60,6 +64,7 @@ function App() {
     const handleJoin = (gid, name) => {
         setGameId(gid);
         setPlayerName(name);
+        setIsCreator(false);
         gameHub.call('JoinGame', gid, name)
             .then(() => setPage('lobby'))
             .catch(e => toast(e.message || 'Failed to join', 'error'));
@@ -72,6 +77,7 @@ function App() {
     const handleLeave = () => {
         setGameState(null);
         setGameId('');
+        setIsCreator(false);
         setPage('home');
     };
 
@@ -102,6 +108,7 @@ function App() {
                     gameState={gameState}
                     onStart={handleStart}
                     onLeave={handleLeave}
+                    isCreator={isCreator}
                     isAdmin={!!adminKey}
                     onAdmin={() => setPage('admin')}
                 />
@@ -114,6 +121,7 @@ function App() {
                     onLeave={handleLeave}
                     isAdmin={!!adminKey}
                     onAdmin={() => setPage('admin')}
+                    adminKey={adminKey}
                 />
             )}
             {!loading && page === 'admin' && (
