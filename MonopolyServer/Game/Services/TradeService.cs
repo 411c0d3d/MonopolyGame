@@ -32,14 +32,16 @@ public class TradeService
         var engine = _roomManager.GetGameEngine(gameId);
 
         if (game == null || engine == null)
+        {
             return null;
+        }
 
-        var result = engine.ProposeTrade(fromPlayerId, toPlayerId, tradeOffer);
+        var result = engine.ProposeTrade(tradeOffer);
         if (result != null)
         {
             var fromPlayer = game.GetPlayerById(fromPlayerId);
             var toPlayer = game.GetPlayerById(toPlayerId);
-            _logger.LogInformation($"Trade proposed: {fromPlayer?.Name} -> {toPlayer?.Name}");
+            _logger.LogInformation("Trade proposed: {From} -> {To}", fromPlayer?.Name, toPlayer?.Name);
         }
 
         return result;

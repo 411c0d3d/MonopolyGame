@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.SignalR;
+using MonopolyServer.Bot;
 using MonopolyServer.DTOs;
 using MonopolyServer.Game.Constants;
 using MonopolyServer.Game.Engine;
@@ -17,20 +18,29 @@ public class GameHub : Hub
 {
     private readonly GameRoomManager _roomManager;
     private readonly TradeService _tradeService;
+    private readonly BotTurnOrchestrator _botOrchestrator;
     private readonly InputValidator _validator;
     private readonly ILogger<GameHub> _logger;
+
 
     /// <summary>
     /// Constructor with dependency injection for game room management, trade services, input validation, and logging.
     /// </summary>
+    /// <param name="roomManager">Manages game rooms and handles retrieval, persistence, and lifecycle of GameState instances.</param>
+    /// <param name="tradeService">Handles creation, validation, and resolution of player-to-player trade offers.</param>
+    /// <param name="botOrchestrator">Schedules and executes bot turns when an AI player is next to act.</param>
+    /// <param name="validator">Validates and sanitizes incoming input (game IDs, player names, property/trade data).</param>
+    /// <param name="logger">Logs hub-level diagnostics, warnings, and error information.</param>
     public GameHub(
         GameRoomManager roomManager,
         TradeService tradeService,
+        BotTurnOrchestrator botOrchestrator,
         InputValidator validator,
         ILogger<GameHub> logger)
     {
         _roomManager = roomManager;
         _tradeService = tradeService;
+        _botOrchestrator = botOrchestrator;
         _validator = validator;
         _logger = logger;
     }
@@ -557,10 +567,15 @@ public class GameHub : Hub
     /// <summary>
     /// Persists game state and broadcasts to all players in the group.
     /// </summary>
+    /// <summary>
+    /// Persists game state, broadcasts to all players in the group,
+    /// then schedules a bot turn if the next active player is a bot.
+    /// </summary>
     private async Task PersistAndBroadcast(string gameId, GameState game)
     {
         await _roomManager.SaveGameAsync(gameId);
         await Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
+        _botOrchestrator.TryScheduleIfBotTurn(gameId, game);
     }
 
     /// <summary>

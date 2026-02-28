@@ -15,7 +15,7 @@ public class TurnTimerService : BackgroundService
     private readonly IHubContext<GameHub> _hubContext;
     private readonly ILogger<TurnTimerService> _logger;
     private readonly TimeSpan _checkInterval = TimeSpan.FromSeconds(5);
-    private readonly TimeSpan _turnTimeLimit = TimeSpan.FromMinutes(3);
+    private readonly TimeSpan _turnTimeLimit = TimeSpan.FromMinutes(1);
 
     public TurnTimerService(
         GameRoomManager roomManager,

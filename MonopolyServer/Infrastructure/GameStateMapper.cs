@@ -46,7 +46,7 @@ public static class GameStateMapper
     };
 
     /// <summary>Maps a Player to its DTO.</summary>
-    public static PlayerDto ToPlayerDto(Player p) => new()
+    private static PlayerDto ToPlayerDto(Player p) => new()
     {
         Id = p.Id,
         Name = p.Name,
@@ -62,6 +62,7 @@ public static class GameStateMapper
         IsCurrentPlayer = p.IsCurrentPlayer,
         HasRolledDice = p.HasRolledDice,
         LastDiceRoll = p.LastDiceRoll,
-        ConsecutiveDoubles = p.ConsecutiveDoubles
+        ConsecutiveDoubles = p.ConsecutiveDoubles,
+        IsBot = p.IsBot
     };
 }

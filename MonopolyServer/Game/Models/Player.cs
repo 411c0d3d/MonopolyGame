@@ -88,6 +88,11 @@ public class Player
     public int ConsecutiveDoubles { get; set; }
 
     /// <summary>
+    /// True if the player a bot.
+    /// </summary>
+    public bool IsBot { get; set; }
+
+    /// <summary>
     /// Parameterless constructor used by System.Text.Json during deserialization.
     /// </summary>
     [System.Text.Json.Serialization.JsonConstructor]
@@ -122,6 +127,7 @@ public class Player
         ConnectionId = null;
         IsConnected = false;
         DisconnectedAt = null;
+        IsBot = false;
     }
 
     /// <summary>
@@ -134,7 +140,7 @@ public class Player
 
         if (newPosition >= 40)
         {
-            Cash += 200;
+            Cash += GameConstants.GoPassingBonus;
             Position = normalizedPosition;
         }
         else
@@ -174,7 +180,7 @@ public class Player
     public void SendToJail()
     {
         IsInJail = true;
-        JailTurnsRemaining = 3;
+        JailTurnsRemaining = GameConstants.MaxJailTurns;
         Position = 10;
     }
 

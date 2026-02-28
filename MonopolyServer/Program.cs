@@ -1,3 +1,4 @@
+using MonopolyServer.Bot;
 using MonopolyServer.Game.Constants;
 using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Hubs;
@@ -30,6 +31,8 @@ public class Program
         builder.Services.AddSingleton<GameRoomManager>();
         builder.Services.AddSingleton<TradeService>();
         builder.Services.AddSingleton<LobbyService>();
+        builder.Services.AddSingleton<BotDecisionEngine>();
+        builder.Services.AddSingleton<BotTurnOrchestrator>();
 
         // Register Background Workers
         builder.Services.AddHostedService<GameCleanupService>();

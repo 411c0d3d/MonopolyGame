@@ -8,13 +8,11 @@ public static class GameConstants
 {
     // Player Configuration
     public const int MinPlayers = 2;
-    public const int MaxPlayers = 4;
+    public const int MaxPlayers = 8;
     public const int StartingCash = 1500;
     public const int StartingPosition = 0;
 
     // Dice Configuration
-    public const int DiceMin = 1;
-    public const int DiceMax = 6;
     public const int MaxConsecutiveDoubles = 3;
 
     // Jail Configuration

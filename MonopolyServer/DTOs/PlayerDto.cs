@@ -79,4 +79,9 @@ public class PlayerDto
     /// Number of consecutive doubles rolled by the player.
     /// </summary>
     public int ConsecutiveDoubles { get; set; }
+
+    /// <summary>
+    /// True if the player a bot.
+    /// </summary>
+    public bool IsBot { get; set; }
 }

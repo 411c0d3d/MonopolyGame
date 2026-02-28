@@ -1,4 +1,5 @@
-﻿using MonopolyServer.Game.Models.Enums;
+﻿using MonopolyServer.Game.Constants;
+using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Game.Services;
 using MonopolyServer.Game.Models;
 
@@ -30,14 +31,14 @@ public class GameEngine
     /// </summary>
     public void StartGame()
     {
-        if (_state.Players.Count < 2)
+        if (_state.Players.Count < GameConstants.MinPlayers)
         {
             throw new InvalidOperationException("Need at least 2 players to start.");
         }
 
         _state.Status = GameStatus.InProgress;
         _state.StartedAt = DateTime.UtcNow;
-        _state.CurrentPlayerIndex = 0;
+        _state.CurrentPlayerIndex = GameConstants.StartingPosition;
         _state.Turn = 1;
         _state.CurrentTurnStartedAt = DateTime.UtcNow;
 
@@ -74,7 +75,7 @@ public class GameEngine
             {
                 currentPlayer.ConsecutiveDoubles++;
 
-                if (currentPlayer.ConsecutiveDoubles >= 3)
+                if (currentPlayer.ConsecutiveDoubles >= GameConstants.MaxConsecutiveDoubles)
                 {
                     SendPlayerToJail(currentPlayer);
                     sentToJail = true;
@@ -325,7 +326,7 @@ public class GameEngine
         {
             player.ReleaseFromJail();
             _state.LogAction($"{player.Name} posted $50 bail to leave jail.");
-            ForcePayment(player, 50); // handles bankruptcy if cash is insufficient
+            ForcePayment(player, GameConstants.JailBailCost); // handles bankruptcy if cash is insufficient
             return true;
         }
 
@@ -343,7 +344,7 @@ public class GameEngine
             // Three turns served — forced release with bail payment
             player.ReleaseFromJail();
             _state.LogAction($"{player.Name}'s jail sentence is complete. Forced to post $50 bail.");
-            ForcePayment(player, 50);
+            ForcePayment(player, GameConstants.JailBailCost);
             return true;
         }
 
@@ -776,42 +777,44 @@ public class GameEngine
     /// <summary>
     /// Propose a trade between two players.
     /// </summary>
-    public TradeOffer? ProposeTrade(string fromPlayerId, string toPlayerId, TradeOffer offer)
+    public TradeOffer? ProposeTrade(TradeOffer offer)
     {
-        var fromPlayer = _state.GetPlayerById(fromPlayerId);
-        var toPlayer = _state.GetPlayerById(toPlayerId);
+        var fromPlayer = _state.GetPlayerById(offer.FromPlayerId);
+        var toPlayer = _state.GetPlayerById(offer.ToPlayerId);
 
         if (fromPlayer == null || toPlayer == null)
+        {
             return null;
+        }
 
         if (fromPlayer.IsBankrupt || toPlayer.IsBankrupt)
+        {
             return null;
+        }
 
         // Validate offering player has the properties and cash they're offering
         if (!ValidateTradeAssets(fromPlayer, offer.OfferedPropertyIds, offer.OfferedCash, offer.OfferedCardIds))
+        {
             return null;
+        }
 
         // Validate requesting player has the properties and cash they're being asked for
         if (!ValidateTradeAssets(toPlayer, offer.RequestedPropertyIds, offer.RequestedCash, offer.RequestedCardIds))
+        {
             return null;
+        }
 
         // Check for duplicate pending trades from same player
-        var existingTrade = _state.PendingTrades.FirstOrDefault(t =>
-            t.FromPlayerId == fromPlayerId &&
-            t.ToPlayerId == toPlayerId &&
+        bool duplicateExists = _state.PendingTrades.Any(t =>
+            t.FromPlayerId == offer.FromPlayerId &&
+            t.ToPlayerId == offer.ToPlayerId &&
             t.Status == TradeStatus.Pending);
 
-        if (existingTrade != null)
+        if (duplicateExists)
         {
             _state.LogAction($"{fromPlayer.Name} already has a pending trade with {toPlayer.Name}.");
             return null;
         }
-
-        offer.Id = Guid.NewGuid().ToString();
-        offer.FromPlayerId = fromPlayerId;
-        offer.ToPlayerId = toPlayerId;
-        offer.CreatedAt = DateTime.UtcNow;
-        offer.Status = TradeStatus.Pending;
 
         _state.PendingTrades.Add(offer);
         _state.LogAction($"{fromPlayer.Name} proposed a trade to {toPlayer.Name}.");

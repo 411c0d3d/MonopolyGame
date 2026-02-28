@@ -28,7 +28,7 @@ public class GameRoomInfo
     /// <summary>
     /// Maximum allowed players for the room.
     /// </summary>
-    public int MaxPlayers { get; set; } = 4;
+    public int MaxPlayers { get; set; } = 8;
 
     /// <summary>
     /// List of players currently in the lobby.
