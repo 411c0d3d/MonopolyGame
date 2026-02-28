@@ -419,9 +419,20 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                 toast(msg, 'error');
                 onLeave();
             }),
+            // Re-join the game group after SignalR auto-reconnect so the server
+            // gets the new connectionId, broadcasts GameStateUpdated, and restores
+            // board state (including owned properties) for this client.
+            gameHub.on('Reconnected', () => {
+                gameHub.call('JoinGame', gameId, playerName)
+                    .catch(() => toast('Failed to rejoin after reconnect', 'error'));
+            }),
+            // Notify all players when someone is kicked by an admin.
+            gameHub.on('PlayerKicked', playerName => {
+                toast(`${playerName} was kicked by the admin`, 'info');
+            }),
         ];
         return () => unsubscribers.forEach(fn => fn());
-    }, []);
+    }, [gameId, playerName]);
 
     const hubCall = (method, ...args) => {
         gameHub.call(method, ...args).catch(e => toast(e.message || 'Action failed', 'error'));
@@ -592,7 +603,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                                 style={{marginTop: 9, color: 'var(--red)', width: 'auto'}}
                                 onClick={() => {
                                     if (confirm('Resign from game?')) {
-                                        hubCall('ResignPlayer', gameId, me?.id);
+                                        hubCall('ResignPlayer', gameId);
                                     }
                                 }}
                             >

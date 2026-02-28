@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Hubs;
+using MonopolyServer.Infrastructure;
 
 namespace MonopolyServer.Game.Services;
 
@@ -72,21 +73,33 @@ public class TurnTimerService : BackgroundService
             }
 
             var turnDuration = DateTime.UtcNow - game.CurrentTurnStartedAt.Value;
-            if (turnDuration > _turnTimeLimit)
+            if (turnDuration <= _turnTimeLimit)
             {
-                _logger.LogWarning($"Turn timeout for {currentPlayer.Name} in game {game.GameId}");
-
-                var engine = _roomManager.GetGameEngine(game.GameId);
-                if (engine != null)
-                {
-                    game.LogAction($"{currentPlayer.Name}'s turn timed out.");
-                    engine.NextTurn();
-                    await _roomManager.SaveGameAsync(game.GameId);
-
-                    await _hubContext.Clients.Group(game.GameId)
-                        .SendAsync("TurnTimeout", new { playerId = currentPlayer.Id, playerName = currentPlayer.Name });
-                }
+                continue;
             }
+
+            _logger.LogWarning(
+                "Turn timeout for {PlayerName} in game {GameId} after {Duration:mm\\:ss}",
+                currentPlayer.Name, game.GameId, turnDuration);
+
+            var engine = _roomManager.GetGameEngine(game.GameId);
+            if (engine == null)
+            {
+                continue;
+            }
+
+            game.LogAction($"{currentPlayer.Name}'s turn timed out and was skipped.");
+            engine.NextTurn();
+            await _roomManager.SaveGameAsync(game.GameId);
+
+            await _hubContext.Clients.Group(game.GameId).SendAsync(
+                "TurnTimeout",
+                new { playerId = currentPlayer.Id, playerName = currentPlayer.Name });
+
+            // Broadcast updated state so all clients advance to the new player's turn
+            await _hubContext.Clients.Group(game.GameId).SendAsync(
+                "GameStateUpdated",
+                GameStateMapper.ToDto(game));
         }
     }
 }

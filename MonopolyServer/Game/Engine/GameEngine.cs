@@ -144,7 +144,7 @@ public class GameEngine
                 break;
 
             case PropertyType.Jail:
-                _state.LogAction($"{player.Name} is visiting Jail (not in jail).");
+                _state.LogAction($"{player.Name} is visiting Jail (just passing).");
                 break;
 
             case PropertyType.Tax:
@@ -152,19 +152,19 @@ public class GameEngine
                 break;
 
             case PropertyType.Chance:
-                _state.LogAction($"{player.Name} drew a Chance card (not implemented).");
+                DrawAndExecuteCard(CardDeck.Chance);
                 break;
 
             case PropertyType.CommunityChest:
-                _state.LogAction($"{player.Name} drew a Community Chest card (not implemented).");
+                DrawAndExecuteCard(CardDeck.CommunityChest);
                 break;
 
             case PropertyType.FreeParking:
-                _state.LogAction($"{player.Name} is in Free Parking.");
+                _state.LogAction($"{player.Name} is on Free Parking.");
                 break;
 
             case PropertyType.Go:
-                _state.LogAction($"{player.Name} is at Go.");
+                _state.LogAction($"{player.Name} landed on Go.");
                 break;
         }
     }
@@ -317,38 +317,39 @@ public class GameEngine
     public bool ReleaseFromJail(Player player, bool payToBail = false)
     {
         if (!player.IsInJail)
+        {
             return false;
+        }
 
         if (payToBail)
         {
-            if (player.DeductCash(50))
-            {
-                player.ReleaseFromJail();
-                _state.LogAction($"{player.Name} paid $50 to leave jail.");
-                return true;
-            }
-
-            return false;
-        }
-
-        // If they rolled doubles or served 3 turns
-        player.JailTurnsRemaining--;
-        if (player.JailTurnsRemaining <= 0 || _state.DoubleRolled)
-        {
             player.ReleaseFromJail();
-            _state.LogAction($"{player.Name} was released from jail.");
+            _state.LogAction($"{player.Name} posted $50 bail to leave jail.");
+            ForcePayment(player, 50); // handles bankruptcy if cash is insufficient
             return true;
         }
 
-        return false;
-    }
+        player.JailTurnsRemaining--;
 
-    /// <summary>
-    /// Pay $50 bail to leave jail immediately before rolling. Returns false if player cannot afford it.
-    /// </summary>
-    public bool PayBailToLeaveJail(Player player)
-    {
-        return ReleaseFromJail(player, payToBail: true);
+        if (_state.DoubleRolled)
+        {
+            player.ReleaseFromJail();
+            _state.LogAction($"{player.Name} rolled doubles and escaped jail.");
+            return true;
+        }
+
+        if (player.JailTurnsRemaining <= 0)
+        {
+            // Three turns served — forced release with bail payment
+            player.ReleaseFromJail();
+            _state.LogAction($"{player.Name}'s jail sentence is complete. Forced to post $50 bail.");
+            ForcePayment(player, 50);
+            return true;
+        }
+
+        _state.LogAction(
+            $"{player.Name} failed to roll doubles. {player.JailTurnsRemaining} turn(s) remaining in jail.");
+        return false;
     }
 
     /// <summary>

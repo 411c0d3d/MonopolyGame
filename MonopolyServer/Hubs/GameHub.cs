@@ -23,10 +23,6 @@ public class GameHub : Hub
     /// <summary>
     /// Constructor with dependency injection for game room management, trade services, input validation, and logging.
     /// </summary>
-    /// <param name="roomManager"></param>
-    /// <param name="tradeService"></param>
-    /// <param name="validator"></param>
-    /// <param name="logger"></param>
     public GameHub(
         GameRoomManager roomManager,
         TradeService tradeService,
@@ -40,8 +36,7 @@ public class GameHub : Hub
     }
 
     /// <summary>
-    /// Authenticates and adds a player to a game session. 
-    /// Supports rejoining via name matching for persistent sessions.
+    /// Authenticates and adds a player to a game session. Supports rejoining via name matching for persistent sessions.
     /// </summary>
     public async Task JoinGame(string gameId, string playerName)
     {
@@ -100,7 +95,6 @@ public class GameHub : Hub
     /// <summary>
     /// Transitions the game from the lobby to an active state.
     /// </summary>
-// Transitions the game from the lobby to an active state.
     public async Task StartGame(string gameId)
     {
         var game = _roomManager.GetGame(gameId);
@@ -122,7 +116,6 @@ public class GameHub : Hub
             return;
         }
 
-        // Initialize the engine if it doesn't exist yet
         var engine = _roomManager.GetGameEngine(gameId);
         if (engine == null)
         {
@@ -135,19 +128,27 @@ public class GameHub : Hub
     }
 
     /// <summary>
-    /// Triggers dice roll, moves the player, and processes board landing logic.
+    /// Triggers dice roll for the current player, moves them, and processes board landing logic.
+    /// Jailed players must use HandleJail instead. On three consecutive doubles the turn auto-advances.
     /// </summary>
     public async Task RollDice(string gameId)
     {
         var game = _roomManager.GetGame(gameId);
         var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-        if (!isValid || currentPlayer == null)
+        if (!isValid || currentPlayer == null || game == null)
         {
             await Clients.Caller.SendAsync("Error", error);
             return;
         }
 
-        if (currentPlayer.HasRolledDice && !game!.DoubleRolled)
+        if (currentPlayer.IsInJail)
+        {
+            await Clients.Caller.SendAsync("Error", "You are in jail — use HandleJail to roll for escape.");
+            return;
+        }
+
+        // Block re-roll unless the previous roll was a double this turn
+        if (currentPlayer.HasRolledDice && !game.DoubleRolled)
         {
             await Clients.Caller.SendAsync("Error", "You have already rolled this turn.");
             return;
@@ -160,25 +161,19 @@ public class GameHub : Hub
             return;
         }
 
-        var (_, _, total, isDouble, sentToJail) = engine.RollDice();
+        var (_, _, total, _, sentToJail) = engine.RollDice();
 
-        if (!sentToJail)
+        if (sentToJail)
         {
-            if (currentPlayer.IsInJail)
-            {
-                if (isDouble)
-                {
-                    engine.ReleaseFromJail(currentPlayer, payToBail: false);
-                    engine.MovePlayer(total);
-                }
-            }
-            else
-            {
-                engine.MovePlayer(total);
-            }
+            // Three consecutive doubles — player goes to jail and their turn ends immediately
+            engine.NextTurn();
+        }
+        else
+        {
+            engine.MovePlayer(total);
         }
 
-        await PersistAndBroadcast(gameId, game!);
+        await PersistAndBroadcast(gameId, game);
     }
 
     /// <summary>
@@ -218,21 +213,132 @@ public class GameHub : Hub
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error buying property");
+            _logger.LogError(ex, "Error buying property in game {GameId}", gameId);
             await Clients.Caller.SendAsync("Error", "Failed to buy property");
         }
     }
 
     /// <summary>
-    /// Handles specialized logic for players attempting to exit the Jail space.
+    /// Builds a house on the specified property. Requires a monopoly and sufficient cash.
+    /// </summary>
+    public async Task BuildHouse(string gameId, int propertyId)
+    {
+        try
+        {
+            var (isPropValid, propErr) = _validator.ValidatePropertyId(propertyId);
+            if (!isPropValid)
+            {
+                await Clients.Caller.SendAsync("Error", propErr);
+                return;
+            }
+
+            var game = _roomManager.GetGame(gameId);
+            var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
+            if (!isValid || currentPlayer == null || game == null)
+            {
+                await Clients.Caller.SendAsync("Error", error);
+                return;
+            }
+
+            var property = game.Board.GetProperty(propertyId);
+            if (property.OwnerId != currentPlayer.Id)
+            {
+                await Clients.Caller.SendAsync("Error", "You do not own this property");
+                return;
+            }
+
+            var engine = _roomManager.GetGameEngine(gameId);
+            if (engine == null)
+            {
+                await Clients.Caller.SendAsync("Error", "Game engine not available");
+                return;
+            }
+
+            if (!engine.BuildHouse(property))
+            {
+                await Clients.Caller.SendAsync("Error",
+                    "Cannot build a house here — check monopoly ownership, house limit, or cash");
+                return;
+            }
+
+            await PersistAndBroadcast(gameId, game);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error building house in game {GameId}", gameId);
+            await Clients.Caller.SendAsync("Error", "Failed to build house");
+        }
+    }
+
+    /// <summary>
+    /// Builds a hotel on the specified property. Requires four houses and sufficient cash.
+    /// </summary>
+    public async Task BuildHotel(string gameId, int propertyId)
+    {
+        try
+        {
+            var (isPropValid, propErr) = _validator.ValidatePropertyId(propertyId);
+            if (!isPropValid)
+            {
+                await Clients.Caller.SendAsync("Error", propErr);
+                return;
+            }
+
+            var game = _roomManager.GetGame(gameId);
+            var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
+            if (!isValid || currentPlayer == null || game == null)
+            {
+                await Clients.Caller.SendAsync("Error", error);
+                return;
+            }
+
+            var property = game.Board.GetProperty(propertyId);
+            if (property.OwnerId != currentPlayer.Id)
+            {
+                await Clients.Caller.SendAsync("Error", "You do not own this property");
+                return;
+            }
+
+            var engine = _roomManager.GetGameEngine(gameId);
+            if (engine == null)
+            {
+                await Clients.Caller.SendAsync("Error", "Game engine not available");
+                return;
+            }
+
+            if (!engine.BuildHotel(property))
+            {
+                await Clients.Caller.SendAsync("Error", "Cannot build a hotel here — requires 4 houses or check cash");
+                return;
+            }
+
+            await PersistAndBroadcast(gameId, game);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error building hotel in game {GameId}", gameId);
+            await Clients.Caller.SendAsync("Error", "Failed to build hotel");
+        }
+    }
+
+    /// <summary>
+    /// Handles all jail actions: use a Get Out of Jail Free card, pay the $50 fine, or roll for escape.
+    /// A successful roll (double) releases the player and moves them but does NOT grant an extra re-roll.
+    /// On the third failed roll the engine force-releases the player and collects the bail via ForcePayment.
     /// </summary>
     public async Task HandleJail(string gameId, bool useCard, bool payFine)
     {
         var game = _roomManager.GetGame(gameId);
         var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-        if (!isValid || currentPlayer == null)
+        if (!isValid || currentPlayer == null || game == null)
         {
             await Clients.Caller.SendAsync("Error", error);
+            return;
+        }
+
+        if (!currentPlayer.IsInJail)
+        {
+            await Clients.Caller.SendAsync("Error", "You are not in jail");
             return;
         }
 
@@ -245,32 +351,38 @@ public class GameHub : Hub
 
         if (useCard)
         {
-            engine.UseGetOutOfJailFreeCard(currentPlayer);
+            if (!engine.UseGetOutOfJailFreeCard(currentPlayer))
+            {
+                await Clients.Caller.SendAsync("Error", "You do not have a Get Out of Jail Free card");
+                return;
+            }
+            // Player is now free — they must still call RollDice to move this turn
         }
         else if (payFine)
         {
-            engine.PayBailToLeaveJail(currentPlayer);
+            engine.ReleaseFromJail(currentPlayer, payToBail: true);
+            // Player is now free — they must still call RollDice to move this turn
         }
         else
         {
+            // Roll attempt — engine.RollDice sets DoubleRolled before ReleaseFromJail reads it
             var (_, _, total, isDouble, _) = engine.RollDice();
+            bool escaped = engine.ReleaseFromJail(currentPlayer, payToBail: false);
 
-            if (isDouble)
+            if (escaped)
             {
-                engine.ReleaseFromJail(currentPlayer, payToBail: false);
                 engine.MovePlayer(total);
-            }
-            else
-            {
-                currentPlayer.JailTurnsRemaining--;
-                if (currentPlayer.JailTurnsRemaining <= 0)
+
+                if (isDouble)
                 {
-                    engine.PayBailToLeaveJail(currentPlayer);
+                    // Jail-escape doubles do not grant an additional re-roll
+                    game.DoubleRolled = false;
                 }
             }
+            // else: still in jail, player calls EndTurn to finish their turn
         }
 
-        await PersistAndBroadcast(gameId, game!);
+        await PersistAndBroadcast(gameId, game);
     }
 
     /// <summary>
@@ -294,7 +406,6 @@ public class GameHub : Hub
         }
 
         var property = game.Board.GetProperty(propertyId);
-
         if (property.OwnerId != currentPlayer.Id)
         {
             await Clients.Caller.SendAsync("Error", "You don't own this property");
@@ -371,7 +482,7 @@ public class GameHub : Hub
     {
         var game = _roomManager.GetGame(gameId);
         var caller = GetCallingPlayer(game);
-        if (caller == null)
+        if (caller == null || game == null)
         {
             return;
         }
@@ -382,12 +493,13 @@ public class GameHub : Hub
 
         if (success)
         {
-            await PersistAndBroadcast(gameId, game!);
+            await PersistAndBroadcast(gameId, game);
         }
     }
 
     /// <summary>
-    /// Ends the current turn and rotates play to the next non-bankrupt player.
+    /// Ends the current player's turn and advances to the next non-bankrupt player.
+    /// The player must have rolled this turn before ending (unless the timer forced an advance).
     /// </summary>
     public async Task EndTurn(string gameId)
     {
@@ -396,6 +508,12 @@ public class GameHub : Hub
         if (!isValid || game == null || player == null)
         {
             await Clients.Caller.SendAsync("Error", error);
+            return;
+        }
+
+        if (!player.HasRolledDice)
+        {
+            await Clients.Caller.SendAsync("Error", "You must roll the dice before ending your turn.");
             return;
         }
 
@@ -424,6 +542,7 @@ public class GameHub : Hub
     {
         var game = _roomManager.GetAllGames()
             .FirstOrDefault(g => g.Players.Any(p => p.ConnectionId == Context.ConnectionId));
+
         if (game != null)
         {
             var player = game.Players.First(p => p.ConnectionId == Context.ConnectionId);
@@ -436,16 +555,16 @@ public class GameHub : Hub
     }
 
     /// <summary>
-    /// Centralized persistence and broadcast logic to ensure state consistency.
+    /// Persists game state and broadcasts to all players in the group.
     /// </summary>
     private async Task PersistAndBroadcast(string gameId, GameState game)
     {
         await _roomManager.SaveGameAsync(gameId);
-        await Clients.Group(gameId).SendAsync("GameStateUpdated", SerializeGameState(game));
+        await Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
     }
 
     /// <summary>
-    /// Validates that the caller is the authorized player for the current turn.
+    /// Validates that the SignalR caller is the authorized player for the current turn.
     /// </summary>
     private (bool isValid, Player? player, string? error) VerifyCurrentPlayer(GameState? game)
     {
@@ -474,67 +593,9 @@ public class GameHub : Hub
     }
 
     /// <summary>
-    /// Maps internal state into a clean DTO for client consumption.
+    /// Maps a GameState to its broadcast DTO via the shared mapper.
     /// </summary>
-    private GameStateDto SerializeGameState(GameState game) => new()
-    {
-        GameId = game.GameId,
-        HostId = game.HostId,
-        Status = game.Status.ToString(),
-        Turn = game.Turn,
-        CurrentPlayerIndex = game.CurrentPlayerIndex,
-        CurrentPlayer = game.GetCurrentPlayer() != null ? MapToDto(game.GetCurrentPlayer()!) : null,
-        Players = game.Players.Select(MapToDto).ToList(),
-        Board = game.Board.Spaces.Select(s => new PropertyDto
-        {
-            Id = s.Id,
-            Name = s.Name,
-            Type = s.Type.ToString(),
-            ColorGroup = s.ColorGroup,
-            OwnerId = s.OwnerId,
-            OwnerName = s.OwnerId != null ? game.GetPlayerById(s.OwnerId)?.Name : null,
-            PurchasePrice = s.PurchasePrice,
-            MortgageValue = s.MortgageValue,
-            HouseCost = s.HouseCost,
-            HotelCost = s.HotelCost,
-            RentValues = s.RentValues,
-            HouseCount = s.HouseCount,
-            HasHotel = s.HasHotel,
-            IsMortgaged = s.IsMortgaged
-        }).ToList(),
-        EventLog = game.EventLog.TakeLast(10).ToList(),
-        CurrentTurnStartedAt = game.CurrentTurnStartedAt,
-        FinishedAt = game.FinishedAt,
-        CreatedAt = game.CreatedAt,
-        StartedAt = game.StartedAt,
-        EndedAt = game.EndedAt,
-        LastDiceRoll = game.LastDiceRoll,
-        DoubleRolled = game.DoubleRolled,
-        PendingTrades = game.PendingTrades,
-        WinnerId = game.WinnerId
-    };
-
-    /// <summary>
-    /// Maps player model to DTO.
-    /// </summary>
-    private PlayerDto MapToDto(Player p) => new()
-    {
-        Id = p.Id,
-        Name = p.Name,
-        Cash = p.Cash,
-        Position = p.Position,
-        IsInJail = p.IsInJail,
-        JailTurnsRemaining = p.JailTurnsRemaining,
-        IsBankrupt = p.IsBankrupt,
-        KeptCardCount = p.KeptCards.Count,
-        IsConnected = p.IsConnected,
-        DisconnectedAt = p.DisconnectedAt,
-        JoinedAt = p.JoinedAt,
-        IsCurrentPlayer = p.IsCurrentPlayer,
-        HasRolledDice = p.HasRolledDice,
-        LastDiceRoll = p.LastDiceRoll,
-        ConsecutiveDoubles = p.ConsecutiveDoubles
-    };
+    private static GameStateDto SerializeGameState(GameState game) => GameStateMapper.ToDto(game);
 
     /// <summary>
     /// Maps a trade offer to a DTO for broadcasting.
@@ -554,8 +615,51 @@ public class GameHub : Hub
     };
 
     /// <summary>
-    /// Helper to retrieve the player model using the SignalR Context.
+    /// Resolves the calling player by their SignalR connection ID.
     /// </summary>
     private Player? GetCallingPlayer(GameState? game) =>
         game?.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+    
+    /// <summary>
+    /// Resigns the calling player from the game, triggering bankruptcy and asset transfer to the bank.
+    /// </summary>
+    public async Task ResignPlayer(string gameId)
+    {
+        var game = _roomManager.GetGame(gameId);
+        if (game == null)
+        {
+            await Clients.Caller.SendAsync("Error", "Game not found");
+            return;
+        }
+
+        var caller = GetCallingPlayer(game);
+        if (caller == null)
+        {
+            await Clients.Caller.SendAsync("Error", "Unauthorized");
+            return;
+        }
+
+        if (game.Status != GameStatus.InProgress)
+        {
+            await Clients.Caller.SendAsync("Error", "Game is not in progress");
+            return;
+        }
+
+        var engine = _roomManager.GetGameEngine(gameId);
+        if (engine == null)
+        {
+            await Clients.Caller.SendAsync("Error", "Game engine not available");
+            return;
+        }
+
+        engine.ResignPlayer(caller.Id);
+
+        // If it was this player's turn, advance to the next player
+        if (game.GetCurrentPlayer()?.Id == caller.Id || game.GetCurrentPlayer() == null)
+        {
+            engine.NextTurn();
+        }
+
+        await PersistAndBroadcast(gameId, game);
+    }
 }
