@@ -16,7 +16,12 @@ function Board({board, players}) {
 
     const toks = (id) => (pm[id] || []).map((p, i) => (
         <div key={p.id} className="tok" style={{
-            background: COLORS[p.ci % COLORS.length], top: 3 + i * 14, right: 3, width: 14, height: 14, fontSize: 7
+            background: COLORS[p.ci % COLORS.length],
+            top: 3 + i * 14,
+            right: 3,
+            width: 14,
+            height: 14,
+            fontSize: 7
         }} title={p.name}>
             {p.name[0]}
         </div>
@@ -33,115 +38,232 @@ function Board({board, players}) {
         return {};
     };
 
+    /** Maps a non-street space type/name to an appropriate emoji icon. */
+    const getIcon = (s) => {
+        if (s.type === 'Railroad') {
+            return '🚂';
+        }
+        if (s.type === 'Utility') {
+            if (s.name.includes('Water')) {
+                return '💧';
+            }
+            if (s.name.includes('Electric')) {
+                return '⚡';
+            }
+            return '🔌';
+        }
+        if (s.type === 'Tax') {
+            if (s.name.includes('Luxury')) {
+                return '💍';
+            }
+            return '💰';
+        }
+        if (s.type === 'Chance') {
+            return '❓';
+        }
+        if (s.type === 'CommunityChest') {
+            return '🏛';
+        }
+        if (s.type === 'Go') {
+            return '🏁';
+        }
+        if (s.type === 'Jail') {
+            return '⛓';
+        }
+        if (s.type === 'FreeParking') {
+            return '🅿';
+        }
+        if (s.type === 'GoToJail') {
+            return '🚔';
+        }
+        return '';
+    };
+
     /** Renders an individual space cell on the board. */
     const Cell = ({space, layout, style = {}}) => {
         const boardSpace = board?.find(b => b.id === space.id);
+        const isStreet = space.type === 'Street';
         const isVert = style.flexDirection === 'row' || style.flexDirection === 'row-reverse';
+        const icon = getIcon(space);
         const hasPrice = ['Street', 'Railroad', 'Utility'].includes(space.type);
 
-        const getIcon = (s) => {
-            if (s.type === 'Railroad') {
-                return '🚂 ';
-            }
-            if (s.type === 'Utility') {
-                if (s.name.includes('Water')) {
-                    return '💧 ';
-                }
-                if (s.name.includes('Electric')) {
-                    return '⚡ ';
-                }
-            }
-            if (s.type === 'Tax') {
-                if (s.name.includes('Luxury')) {
-                    return '💍 ';
-                }
-                if (s.name.includes('Income')) {
-                    return '💰 ';
-                }
-            }
-            return '';
-        };
+        let bnameContent;
 
-        const icon = getIcon(space);
-        let bnameContent = null;
-
-        if (layout === 'left') {
-            bnameContent = (
-                <div style={{
-                    display: 'flex',
-                    flexDirection: 'row',
-                    width: '100%',
-                    height: '100%',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '2px'
-                }}>
-                    <div style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)', textAlign: 'center'}}>
-                        {icon}{space.name}
+        if (isStreet) {
+            // Streets: name + optional price, no icon
+            if (layout === 'left') {
+                bnameContent = (
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'row',
+                        width: '100%',
+                        height: '100%',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '2px'
+                    }}>
+                        <div style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)', textAlign: 'center'}}>
+                            {space.name}
+                        </div>
+                        {hasPrice && (
+                            <div style={{
+                                writingMode: 'vertical-rl',
+                                transform: 'rotate(180deg)',
+                                fontWeight: 800,
+                                fontSize: 'clamp(5px, 0.6vw, 8px)'
+                            }}>
+                                ${boardSpace?.purchasePrice || space.price || '0'}
+                            </div>
+                        )}
                     </div>
-                    {hasPrice && (
-                        <div style={{
-                            writingMode: 'vertical-rl',
-                            transform: 'rotate(180deg)',
-                            fontWeight: 800,
-                            fontSize: 'clamp(5px, 0.6vw, 8px)'
-                        }}>
-                            ${boardSpace?.purchasePrice || space.price || '0'}
+                );
+            } else if (layout === 'right') {
+                bnameContent = (
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'row',
+                        width: '100%',
+                        height: '100%',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '2px'
+                    }}>
+                        {hasPrice && (
+                            <div style={{
+                                writingMode: 'vertical-rl',
+                                fontWeight: 800,
+                                fontSize: 'clamp(5px, 0.6vw, 8px)'
+                            }}>
+                                ${boardSpace?.purchasePrice || space.price || '0'}
+                            </div>
+                        )}
+                        <div style={{writingMode: 'vertical-rl', textAlign: 'center'}}>
+                            {space.name}
                         </div>
-                    )}
-                </div>
-            );
-        } else if (layout === 'right') {
-            bnameContent = (
-                <div style={{
-                    display: 'flex',
-                    flexDirection: 'row',
-                    width: '100%',
-                    height: '100%',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '2px'
-                }}>
-                    {hasPrice && (
-                        <div style={{writingMode: 'vertical-rl', fontWeight: 800, fontSize: 'clamp(5px, 0.6vw, 8px)'}}>
-                            ${boardSpace?.purchasePrice || space.price || '0'}
-                        </div>
-                    )}
-                    <div style={{writingMode: 'vertical-rl', textAlign: 'center'}}>
-                        {icon}{space.name}
                     </div>
-                </div>
-            );
-        } else if (layout === 'bottom') {
-            bnameContent = (
-                <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    width: '100%',
-                    height: '100%',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '2px 0'
-                }}>
-                    <div style={{padding: '0 2px', textAlign: 'center'}}>{icon}{space.name}</div>
-                    {hasPrice && (
-                        <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>
-                            ${boardSpace?.purchasePrice || space.price || '0'}
-                        </div>
-                    )}
-                </div>
-            );
+                );
+            } else if (layout === 'bottom') {
+                bnameContent = (
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        width: '100%',
+                        height: '100%',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '2px 0'
+                    }}>
+                        <div style={{padding: '0 2px', textAlign: 'center'}}>{space.name}</div>
+                        {hasPrice && (
+                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>
+                                ${boardSpace?.purchasePrice || space.price || '0'}
+                            </div>
+                        )}
+                    </div>
+                );
+            } else {
+                // top
+                bnameContent = (
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                    }}>
+                        <div style={{padding: '0 2px', textAlign: 'center'}}>{space.name}</div>
+                        {hasPrice && (
+                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800, marginTop: 2}}>
+                                ${boardSpace?.purchasePrice || space.price || '0'}
+                            </div>
+                        )}
+                    </div>
+                );
+            }
         } else {
-            bnameContent = (
-                <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'}}>
-                    <div style={{padding: '0 2px', textAlign: 'center'}}>{icon}{space.name}</div>
-                    {hasPrice && (
-                        <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800, marginTop: 2}}>
-                            ${boardSpace?.purchasePrice || space.price || '0'}
+            // Non-street: medium icon centered, name strip near outer border
+            if (layout === 'left') {
+                // Outer border = LEFT edge of cell
+                bnameContent = (
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'row',
+                        width: '100%',
+                        height: '100%',
+                        alignItems: 'center'
+                    }}>
+                        <div className="bname-strip" style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)'}}>
+                            {space.name}
                         </div>
-                    )}
-                </div>
-            );
+                        <div className="bicon" style={{flex: 1}}>
+                            {icon}
+                        </div>
+                    </div>
+                );
+            } else if (layout === 'right') {
+                // Outer border = RIGHT edge of cell
+                bnameContent = (
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'row',
+                        width: '100%',
+                        height: '100%',
+                        alignItems: 'center'
+                    }}>
+                        <div className="bicon" style={{flex: 1}}>
+                            {icon}
+                        </div>
+                        <div className="bname-strip" style={{writingMode: 'vertical-rl'}}>
+                            {space.name}
+                        </div>
+                    </div>
+                );
+            } else if (layout === 'bottom') {
+                // Outer border = BOTTOM edge — name at bottom, icon above
+                bnameContent = (
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        width: '100%',
+                        height: '100%',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '3px 2px'
+                    }}>
+                        <div className="bicon">{icon}</div>
+                        <div style={{
+                            fontSize: 'clamp(4px, 0.55vw, 6px)',
+                            fontWeight: 700,
+                            textAlign: 'center',
+                            lineHeight: 1.1
+                        }}>
+                            {space.name}
+                        </div>
+                    </div>
+                );
+            } else {
+                // top — name at top, icon below
+                bnameContent = (
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        width: '100%',
+                        height: '100%',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '3px 2px'
+                    }}>
+                        <div style={{
+                            fontSize: 'clamp(4px, 0.55vw, 6px)',
+                            fontWeight: 700,
+                            textAlign: 'center',
+                            lineHeight: 1.1
+                        }}>
+                            {space.name}
+                        </div>
+                        <div className="bicon">{icon}</div>
+                    </div>
+                );
+            }
         }
 
         return (
@@ -154,17 +276,11 @@ function Board({board, players}) {
                     <div className="bcolor" style={{
                         background: BCOLORS[space.color] || '#ccc',
                         width: isVert ? '12px' : '100%',
-                        height: isVert ? '100%' : '12px'
+                        height: isVert ? '100%' : '12px',
+                        flexShrink: 0
                     }}/>
                 )}
-                <div className="bname" style={{
-                    flex: 1,
-                    display: 'flex',
-                    width: '100%',
-                    height: '100%',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                }}>
+                <div className="bname">
                     {bnameContent}
                 </div>
                 {toks(space.id)}
@@ -172,6 +288,7 @@ function Board({board, players}) {
         );
     };
 
+    /** Inspect modal shown when a space cell is clicked. */
     const InspectModal = () => {
         if (!inspectSpace) {
             return null;
@@ -206,14 +323,12 @@ function Board({board, players}) {
                                     <strong style={{color: 'var(--green)'}}>${boardSpace.purchasePrice}</strong>
                                 </div>
                             )}
-
                             {owner && (
                                 <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14}}>
                                     <span style={{color: '#999'}}>Owner</span>
                                     <strong>{owner.name}</strong>
                                 </div>
                             )}
-
                             {!owner && boardSpace.purchasePrice && (
                                 <div style={{
                                     background: 'var(--cream)',
@@ -226,17 +341,14 @@ function Board({board, players}) {
                                     Available for purchase
                                 </div>
                             )}
-
                             {boardSpace.isMortgaged && (
                                 <span className="badge bg-red" style={{alignSelf: 'flex-start'}}>Mortgaged</span>
                             )}
-
                             {boardSpace.houseCount > 0 && (
                                 <div style={{fontSize: 14}}>
                                     🏠 {boardSpace.houseCount} house{boardSpace.houseCount !== 1 ? 's' : ''}
                                 </div>
                             )}
-
                             {boardSpace.hasHotel && (<div style={{fontSize: 14}}>🏨 Hotel</div>)}
                         </div>
                     )}
@@ -257,44 +369,52 @@ function Board({board, players}) {
         <div className="bwrap">
             <div className="bgrid">
                 {/* GO: bottom-right */}
-                <div className="bcorner" style={{gridColumn: 11, gridRow: 11, fontSize: 8, background: '#e8f5e9'}}>
-                    <span className="corner-icon">🏁</span><br/>GO{toks(0)}
+                <div className="bcorner" style={{gridColumn: 11, gridRow: 11, background: '#e8f5e9'}}>
+                    <span className="corner-icon">🏁</span>
+                    <span className="corner-label">GO</span>
+                    {toks(0)}
                 </div>
                 {/* Jail: bottom-left */}
                 <div className="bcorner" style={{gridColumn: 1, gridRow: 11}}>
-                    <span className="corner-icon">⛓</span><br/>Jail{toks(10)}
+                    <span className="corner-icon">⛓</span>
+                    <span className="corner-label">Jail</span>
+                    {toks(10)}
                 </div>
                 {/* Free Parking: top-left */}
                 <div className="bcorner" style={{gridColumn: 1, gridRow: 1}}>
-                    <span className="corner-icon">🅿</span><br/>Free{toks(20)}
+                    <span className="corner-icon">🅿</span>
+                    <span className="corner-label">Free</span>
+                    {toks(20)}
                 </div>
                 {/* Go To Jail: top-right */}
                 <div className="bcorner" style={{gridColumn: 11, gridRow: 1}}>
-                    <span className="corner-icon">🚔</span><br/>Jail!{toks(30)}
+                    <span className="corner-icon">🚔</span>
+                    <span className="corner-label">Jail!</span>
+                    {toks(30)}
                 </div>
 
-                {/* Bottom row: spaces 1-9 (right to left from GO toward Jail) */}
+                {/* Bottom row: spaces 1–9 (right to left, GO toward Jail) */}
                 {SPACES.slice(1, 10).map((s, i) => (
                     <div key={s.id} style={{gridColumn: 10 - i, gridRow: 11, display: 'flex', flexDirection: 'column'}}>
                         <Cell space={s} layout="bottom" style={{height: '100%', flexDirection: 'column'}}/>
                     </div>
                 ))}
 
-                {/* Left column: spaces 11-19 (bottom to top, Jail toward Free Parking) */}
+                {/* Left column: spaces 11–19 (bottom to top, Jail toward Free Parking) */}
                 {SPACES.slice(11, 20).map((s, i) => (
                     <div key={s.id} style={{gridColumn: 1, gridRow: 10 - i, display: 'flex'}}>
                         <Cell space={s} layout="left" style={{height: '100%', width: '100%', flexDirection: 'row'}}/>
                     </div>
                 ))}
 
-                {/* Top row: spaces 21-29 (left to right from Free Parking to Go To Jail) */}
+                {/* Top row: spaces 21–29 (left to right, Free Parking toward Go To Jail) */}
                 {SPACES.slice(21, 30).map((s, i) => (
                     <div key={s.id} style={{gridColumn: 2 + i, gridRow: 1, display: 'flex', flexDirection: 'column'}}>
                         <Cell space={s} layout="top" style={{height: '100%', flexDirection: 'column'}}/>
                     </div>
                 ))}
 
-                {/* Right column: spaces 31-39 (top to bottom from Go To Jail to GO) */}
+                {/* Right column: spaces 31–39 (top to bottom, Go To Jail toward GO) */}
                 {SPACES.slice(31, 40).map((s, i) => (
                     <div key={s.id} style={{gridColumn: 11, gridRow: 2 + i, display: 'flex'}}>
                         <Cell space={s} layout="right"
@@ -321,8 +441,7 @@ function Board({board, players}) {
                                 <div className="card-deck-layer"
                                      style={{background: '#fff9c4', borderColor: '#b8860b66'}}/>
                                 <div className="card-deck-layer"
-                                     style={{background: '#fff9c4', borderColor: '#b8860b99', color: '#b8860b'}}>
-                                    ❓
+                                     style={{background: '#fff9c4', borderColor: '#b8860b99', color: '#b8860b'}}>❓
                                 </div>
                             </div>
                             <div className="board-card-stack-label">Chance</div>
@@ -334,8 +453,7 @@ function Board({board, players}) {
                                 <div className="card-deck-layer"
                                      style={{background: '#c8e6c9', borderColor: '#2d6a4f66'}}/>
                                 <div className="card-deck-layer"
-                                     style={{background: '#c8e6c9', borderColor: '#2d6a4f99', color: '#2d6a4f'}}>
-                                    🏛
+                                     style={{background: '#c8e6c9', borderColor: '#2d6a4f99', color: '#2d6a4f'}}>🏛
                                 </div>
                             </div>
                             <div className="board-card-stack-label">Comm. Chest</div>
