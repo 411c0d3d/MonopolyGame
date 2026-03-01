@@ -16,7 +16,6 @@ const {
     useRef,
     useCallback,
     useContext,
-    createContext,
 } = React;
 
 // ─── SignalR UMD global ───────────────────────────────────────────────────────
@@ -50,7 +49,13 @@ const {
  * }} SignalRHubConnection
  */
 
-/** @type {{ LogLevel: SignalRLogLevel, HubConnectionBuilder: { new(): SignalRHubConnectionBuilder } }} */
+/** @type {{
+ * LogLevel: SignalRLogLevel,
+ * HubConnectionState,
+ * HubConnectionBuilder: { new(): SignalRHubConnectionBuilder }
+ * }} 
+ */
+
 const signalR = window.signalR;
 
 // ─── Server response shapes ───────────────────────────────────────────────────
@@ -80,6 +85,8 @@ const signalR = window.signalR;
  *   isMortgaged:boolean,
  *   houseCount:number,
  *   hasHotel:boolean
+ *   houseCost:number,
+ *   boardSpaces:number,
  * }} BoardProperty
  */
 
