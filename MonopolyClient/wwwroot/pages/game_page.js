@@ -1,39 +1,8 @@
-/* globals useState, useEffect, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, React, ReactDOM, signalR, TurnTimer */
+/* globals useState, useEffect, useRef, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, React, ReactDOM, signalR, TurnTimer, usePlayerHop, useDiceRoll, DiceTray, ChestCardPopup */
 
-// components/game_page.js — depends on constants.js, signalr.js, header.js, board.js.
+// components/game_page.js — depends on constants.js, signalr.js, header.js, board.js, animations.js.
 
-/**
- * Countdown timer showing seconds remaining in the current turn (90s limit).
- * @param {{ startedAt: string|null }} props
- */
-
-/** Pip grid positions per die face value. */
-const DIE_PIPS = {
-    1: [[1, 1]],
-    2: [[0, 0], [2, 2]],
-    3: [[0, 0], [1, 1], [2, 2]],
-    4: [[0, 0], [0, 2], [2, 0], [2, 2]],
-    5: [[0, 0], [0, 2], [1, 1], [2, 0], [2, 2]],
-    6: [[0, 0], [0, 2], [1, 0], [1, 2], [2, 0], [2, 2]],
-};
-
-/**
- * Renders a single die face with animated roll state.
- * @param {{ value: number|null, rolling: boolean }} props
- */
-function Die({value, rolling}) {
-    const grid = Array(9).fill(false);
-    if (value) {
-        DIE_PIPS[value].forEach(([row, col]) => {
-            grid[row * 3 + col] = true;
-        });
-    }
-    return (
-        <div className={`die${rolling ? ' roll' : ''}`}>
-            {grid.map((active, i) => <div key={i} className={`pip${active ? '' : ' off'}`}/>)}
-        </div>
-    );
-}
+// Die, DiceTray, ChestCardPopup, usePlayerHop, useDiceRoll are provided by animations.js.
 
 /**
  * Modal for resolving a jail situation on the player's turn.
@@ -98,8 +67,16 @@ function IncomingTradeModal({offer, gameId, onDone}) {
             <div key={color}>
                 <ColorGroupHeader color={color}/>
                 {items.map(({pid, space}) => (
-                    <div key={String(pid)} style={{display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, marginBottom: 3, paddingLeft: 4}}>
-                        🏠 <span>{space ? space.name.replace('\n', ' ') : `#${pid}`} <span style={{color: '#bbb', fontSize: 10}}>(#{pid})</span></span>
+                    <div key={String(pid)} style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        fontSize: 12,
+                        marginBottom: 3,
+                        paddingLeft: 4
+                    }}>
+                        🏠 <span>{space ? space.name.replace('\n', ' ') : `#${pid}`} <span
+                        style={{color: '#bbb', fontSize: 10}}>(#{pid})</span></span>
                     </div>
                 ))}
             </div>
@@ -168,7 +145,12 @@ function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClo
             offeredCardIds: [],
             requestedCardIds: [],
         };
-        console.log('[TRADE] Sending ProposeTrade', { gameId, toPlayerId: target.id, toPlayerName: target.name, payload });
+        console.log('[TRADE] Sending ProposeTrade', {
+            gameId,
+            toPlayerId: target.id,
+            toPlayerName: target.name,
+            payload
+        });
         gameHub.call('ProposeTrade', gameId, target.id, payload)
             .then(() => {
                 console.log('[TRADE] ProposeTrade call resolved (hub accepted the invocation)');
@@ -227,7 +209,12 @@ function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClo
                             <input className="input" type="number" min="0" value={offeredCash}
                                    onChange={e => setOfferedCash(e.target.value)}/>
                         </div>
-                        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9}}>
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            marginBottom: 9
+                        }}>
                             <span className="slabel" style={{marginBottom: 0}}>Your Turn</span>
                             <TurnTimer startedAt={turnStartedAt}/>
                         </div>
@@ -445,9 +432,137 @@ function MortgageConfirmModal({prop, space, onConfirm, onClose}) {
                 <div style={{display: 'flex', gap: 9}}>
                     <button
                         className={`btn btn-full ${isMortgaged ? 'btn-green' : 'btn-red'}`}
-                        onClick={() => { onConfirm(); onClose(); }}
+                        onClick={() => {
+                            onConfirm();
+                            onClose();
+                        }}
                     >
                         {isMortgaged ? `✓ Unmortgage for $${unmortgageCost.toLocaleString()}` : `✓ Mortgage for $${mortgageValue.toLocaleString()}`}
+                    </button>
+                    <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * Modal for selling houses/hotels back to the bank at 50% build cost.
+ * Supports multi-select; shows per-unit value and total payout before confirming.
+ * SellHotel downgrades to 4 houses; SellHouse removes one house at a time.
+ * @param {{ myProperties: any[], boardSpaces: any[], gameId: string, onClose: function }} props
+ */
+function LiquidateBuildingsModal({myProperties, boardSpaces, gameId, onClose}) {
+    const {toast} = useContext(Ctx);
+    const [selected, setSelected] = useState({});
+    const [selling, setSelling] = useState(false);
+
+    const buildingProps = myProperties.filter(p => p.houseCount > 0 || p.hasHotel);
+
+    const toggle = id => setSelected(s => ({...s, [id]: !s[id]}));
+
+    /** Returns sell value info for a property based on its current buildings. */
+    const getSellInfo = (prop) => {
+        const space = SPACES.find(s => s.id === prop.id);
+        const houseCost = space?.houseCost || 0;
+        const perUnit = Math.floor(houseCost / 2);
+        if (prop.hasHotel) {
+            return {label: '🏨 Hotel', perUnit, count: 1, total: perUnit};
+        }
+        return {label: `🏠 × ${prop.houseCount}`, perUnit, count: prop.houseCount, total: perUnit * prop.houseCount};
+    };
+
+    const totalPayout = buildingProps
+        .filter(p => selected[p.id])
+        .reduce((sum, p) => sum + getSellInfo(p).total, 0);
+
+    const handleConfirm = async () => {
+        setSelling(true);
+        const toSell = buildingProps.filter(p => selected[p.id]);
+        try {
+            for (const prop of toSell) {
+                if (prop.hasHotel) {
+                    await gameHub.call('SellHotel', gameId, prop.id);
+                } else {
+                    for (let i = 0; i < prop.houseCount; i++) {
+                        await gameHub.call('SellHouse', gameId, prop.id);
+                    }
+                }
+            }
+            toast('Buildings sold!', 'success');
+            onClose();
+        } catch (e) {
+            toast(e.message || 'Failed to sell', 'error');
+        } finally {
+            setSelling(false);
+        }
+    };
+
+    return (
+        <div className="overlay">
+            <div className="mbox" style={{maxWidth: 420}}>
+                <h3 style={{marginBottom: 4}}>💰 Liquidate Buildings</h3>
+                <p style={{color: '#999', fontSize: 13, marginBottom: 16}}>Select buildings to sell back at 50% build
+                    cost</p>
+
+                {buildingProps.length === 0 && (
+                    <div style={{color: '#aaa', fontSize: 13, textAlign: 'center', padding: '20px 0'}}>No buildings to
+                        sell</div>
+                )}
+
+                {buildingProps.map(prop => {
+                    const space = SPACES.find(s => s.id === prop.id);
+                    const info = getSellInfo(prop);
+                    const isSelected = !!selected[prop.id];
+                    return (
+                        <label key={prop.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 10,
+                            padding: '8px 10px', borderRadius: 8, marginBottom: 6, cursor: 'pointer',
+                            background: isSelected ? 'var(--cream)' : 'transparent',
+                            border: `1.5px solid ${isSelected ? 'var(--gold)' : 'var(--border)'}`,
+                            transition: 'border-color 0.15s, background 0.15s',
+                        }}>
+                            <input type="checkbox" checked={isSelected} onChange={() => toggle(prop.id)}/>
+                            {space?.color && (
+                                <div style={{
+                                    width: 8,
+                                    height: 20,
+                                    background: BCOLORS[space.color] || '#ccc',
+                                    borderRadius: 2,
+                                    flexShrink: 0
+                                }}/>
+                            )}
+                            <div style={{flex: 1, minWidth: 0}}>
+                                <div style={{fontWeight: 600, fontSize: 12}}>{prop.name}</div>
+                                <div style={{fontSize: 11, color: '#888'}}>
+                                    {info.label}
+                                    {info.perUnit > 0 && ` · $${info.perUnit} each`}
+                                </div>
+                            </div>
+                            <div style={{fontSize: 13, fontWeight: 700, color: 'var(--green)', flexShrink: 0}}>
+                                +${info.total.toLocaleString()}
+                            </div>
+                        </label>
+                    );
+                })}
+
+                {buildingProps.length > 0 && (
+                    <div style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        padding: '10px 2px', borderTop: '1.5px solid var(--border)', margin: '8px 0 14px',
+                    }}>
+                        <span style={{color: '#999', fontSize: 13}}>Total payout</span>
+                        <strong style={{fontSize: 18, color: 'var(--green)'}}>+${totalPayout.toLocaleString()}</strong>
+                    </div>
+                )}
+
+                <div style={{display: 'flex', gap: 9}}>
+                    <button
+                        className="btn btn-green btn-full"
+                        onClick={handleConfirm}
+                        disabled={!Object.values(selected).some(Boolean) || selling}
+                    >
+                        {selling ? '…' : '✓ Sell Selected'}
                     </button>
                     <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
                 </div>
@@ -462,16 +577,18 @@ function MortgageConfirmModal({prop, space, onConfirm, onClose}) {
  */
 function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adminKey}) {
     const {toast} = useContext(Ctx);
-    const [dice, setDice] = useState([null, null]);
-    const [rolling, setRolling] = useState(false);
+    const [dice, rolling, triggerRoll, settleDice] = useDiceRoll();
     const [incomingTrade, setIncomingTrade] = useState(null);
     const [jailModalOpen, setJailModalOpen] = useState(false);
     const [paused, setPaused] = useState(gameState?.status === 'Paused');
     const [tradingWith, setTradingWith] = useState(null);
     const [buyModalOpen, setBuyModalOpen] = useState(false);
     const [mortgagePending, setMortgagePending] = useState(null); // { prop, space }
+    const [drawnCard, setDrawnCard] = useState(null); // { type, text, amount? }
+    const [liquidateOpen, setLiquidateOpen] = useState(false);
 
     const players = gameState?.players || [];
+    const animatedPositions = usePlayerHop(players);
     const boardSpaces = gameState?.board || [];
     const eventLog = gameState?.eventLog || [];
     const currentPlayer = gameState?.currentPlayer;
@@ -491,6 +608,8 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
             gameHub.on('TradeProposed', offer => setIncomingTrade(offer)),
             gameHub.on('GamePaused', () => setPaused(true)),
             gameHub.on('GameResumed', () => setPaused(false)),
+            gameHub.on('CardDrawn', card => setDrawnCard(card)),
+            gameHub.on('DiceRolled', (d1, d2) => settleDice(d1, d2)),
             gameHub.on('GameForceEnded', () => {
                 toast('Game ended by admin', 'error');
                 onLeave();
@@ -520,16 +639,9 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
         gameHub.call(method, ...args).catch(e => toast(e.message || 'Action failed', 'error'));
     };
 
+    /** Triggers dice animation then calls the hub. */
     const handleRoll = () => {
-        setRolling(true);
-        const interval = setInterval(
-            () => setDice([Math.ceil(Math.random() * 6), Math.ceil(Math.random() * 6)]),
-            80,
-        );
-        setTimeout(() => {
-            clearInterval(interval);
-            setRolling(false);
-        }, 460);
+        triggerRoll();
         hubCall('RollDice', gameId);
     };
 
@@ -572,9 +684,16 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                 {player.name[0]}
                             </div>
                             <div style={{flex: 1, minWidth: 0}}>
-                                <div style={{fontWeight: 600, fontSize: 11, display: 'flex', alignItems: 'center', gap: 4}}>
+                                <div style={{
+                                    fontWeight: 600,
+                                    fontSize: 11,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 4
+                                }}>
                                     {player.name}
-                                    {player.name === playerName && <span style={{fontSize: 9, color: '#bbb'}}>(you)</span>}
+                                    {player.name === playerName &&
+                                        <span style={{fontSize: 9, color: '#bbb'}}>(you)</span>}
                                     {player.isBot && <span style={{fontSize: 9, color: '#aaa'}}>🤖</span>}
                                     {player.id === currentPlayer?.id && ' 🎲'}
                                 </div>
@@ -586,13 +705,23 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                         </div>
                     ))}
                     <div className="div">Info</div>
-                    <div style={{padding: '10px 13px', background: '#fff', border: '1.5px solid var(--border)', borderRadius: 10}}>
+                    <div style={{
+                        padding: '10px 13px',
+                        background: '#fff',
+                        border: '1.5px solid var(--border)',
+                        borderRadius: 10
+                    }}>
                         {[
                             ['Turn', `#${gameState?.turn || 0}`],
                             ['Current', currentPlayer?.name || '—'],
                             ['Active', players.filter(p => !p.isBankrupt).length],
                         ].map(([label, value]) => (
-                            <div key={String(label)} style={{display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 5}}>
+                            <div key={String(label)} style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                fontSize: 11,
+                                marginBottom: 5
+                            }}>
                                 <span style={{color: '#aaa'}}>{label}</span>
                                 <strong style={{color: 'var(--gold)'}}>{value}</strong>
                             </div>
@@ -602,24 +731,22 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
 
                 {/* CENTER: Board + controls */}
                 <div className="gmain">
-                    <Board board={boardSpaces} players={players.filter(p => !p.isBankrupt)}/>
+                    <Board
+                        board={boardSpaces}
+                        players={players.filter(p => !p.isBankrupt)}
+                        animatedPositions={animatedPositions}
+                    />
 
-                    <div className="dice-area">
-                        <Die value={dice[0]} rolling={rolling}/>
-                        <Die value={dice[1]} rolling={rolling}/>
-                        {dice[0] && dice[1] && (
-                            <div style={{fontSize: 13, color: '#aaa', marginLeft: 8}}>
-                                = {dice[0] + dice[1]}
-                                {dice[0] === dice[1] && (
-                                    <span style={{color: 'var(--gold)', marginLeft: 6, fontWeight: 700}}>Doubles!</span>
-                                )}
-                            </div>
-                        )}
-                    </div>
+                    <DiceTray dice={dice} rolling={rolling}/>
 
                     {isMyTurn && !paused && gameState?.status === 'InProgress' && (
                         <div className="card">
-                            <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9}}>
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                marginBottom: 9
+                            }}>
                                 <span className="slabel" style={{marginBottom: 0}}>Your Turn</span>
                                 <TurnTimer startedAt={gameState?.currentTurnStartedAt}/>
                             </div>
@@ -644,10 +771,17 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                 </button>
                             </div>
                             {currentSpace && (
-                                <div style={{marginTop: 11, padding: '8px 11px', background: 'var(--cream)', borderRadius: 8, fontSize: 12}}>
+                                <div style={{
+                                    marginTop: 11,
+                                    padding: '8px 11px',
+                                    background: 'var(--cream)',
+                                    borderRadius: 8,
+                                    fontSize: 12
+                                }}>
                                     📍 <strong>{currentSpace.name.replace('\n', ' ')}</strong>
                                     {canBuy && <span style={{color: 'var(--green)', marginLeft: 5}}>← available!</span>}
-                                    {isOwned && !isMine && <span style={{color: 'var(--red)', marginLeft: 5}}>← pay rent!</span>}
+                                    {isOwned && !isMine &&
+                                        <span style={{color: 'var(--red)', marginLeft: 5}}>← pay rent!</span>}
                                     {isMine && <span style={{color: '#aaa', marginLeft: 5}}>← yours</span>}
                                 </div>
                             )}
@@ -699,24 +833,38 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                     {myPropertyGroups.map(({color, items}) => (
                         <div key={color}>
                             {color !== '__other' && (
-                                <div style={{display: 'flex', alignItems: 'center', gap: 5, marginTop: 6, marginBottom: 3}}>
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                    marginTop: 6,
+                                    marginBottom: 3
+                                }}>
                                     <div style={{
                                         width: 8, height: 8, borderRadius: 2,
                                         background: BCOLORS[color] || '#ccc', flexShrink: 0
                                     }}/>
-                                    <span style={{fontSize: 10, fontWeight: 700, color: '#888', textTransform: 'capitalize'}}>{color}</span>
+                                    <span style={{
+                                        fontSize: 10,
+                                        fontWeight: 700,
+                                        color: '#888',
+                                        textTransform: 'capitalize'
+                                    }}>{color}</span>
                                 </div>
                             )}
                             {items.map(prop => {
                                 const space = SPACES.find(s => s.id === prop.id);
+                                const houseCost = space?.houseCost;
                                 return (
                                     <div key={prop.id} className="prop-row">
                                         <div style={{display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5}}>
                                             {space?.color && (
-                                                <div className="prop-dot" style={{background: BCOLORS[space.color] || '#ccc'}}/>
+                                                <div className="prop-dot"
+                                                     style={{background: BCOLORS[space.color] || '#ccc'}}/>
                                             )}
                                             <span style={{fontSize: 11, fontWeight: 600, flex: 1}}>{prop.name}</span>
-                                            {prop.isMortgaged && <span className="badge bg-red" style={{fontSize: 9}}>Mort.</span>}
+                                            {prop.isMortgaged &&
+                                                <span className="badge bg-red" style={{fontSize: 9}}>Mort.</span>}
                                         </div>
                                         <div style={{fontSize: 10, color: '#aaa', marginBottom: 6}}>
                                             {prop.hasHotel
@@ -731,18 +879,21 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                                 {space?.type === 'Street' && !prop.isMortgaged && prop.houseCount < 4 && !prop.hasHotel && (
                                                     <button className="btn btn-sm btn-ghost" style={{fontSize: 10}}
                                                             onClick={() => hubCall('BuildHouse', gameId, prop.id)}>
-                                                        +🏠
+                                                        +🏠{houseCost ? ` $${houseCost}` : ''}
                                                     </button>
                                                 )}
                                                 {space?.type === 'Street' && !prop.isMortgaged && prop.houseCount === 4 && !prop.hasHotel && (
                                                     <button className="btn btn-sm btn-ghost" style={{fontSize: 10}}
                                                             onClick={() => hubCall('BuildHotel', gameId, prop.id)}>
-                                                        +🏨
+                                                        +🏨{houseCost ? ` $${houseCost}` : ''}
                                                     </button>
                                                 )}
                                                 <button
                                                     className="btn btn-sm btn-ghost"
-                                                    style={{fontSize: 10, color: prop.isMortgaged ? 'var(--green)' : 'var(--red)'}}
+                                                    style={{
+                                                        fontSize: 10,
+                                                        color: prop.isMortgaged ? 'var(--green)' : 'var(--red)'
+                                                    }}
                                                     onClick={() => setMortgagePending({prop, space})}
                                                 >
                                                     {prop.isMortgaged ? 'Unmortgage' : 'Mortgage'}
@@ -754,6 +905,16 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                             })}
                         </div>
                     ))}
+
+                    {myProperties.some(p => p.houseCount > 0 || p.hasHotel) && (
+                        <button
+                            className="btn btn-ghost btn-sm btn-full"
+                            style={{color: 'var(--gold)', marginBottom: 6}}
+                            onClick={() => setLiquidateOpen(true)}
+                        >
+                            💰 Liquidate Buildings
+                        </button>
+                    )}
 
                     <div className="div">Trade</div>
                     <div className="slabel">Trade With</div>
@@ -784,6 +945,17 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                 </div>
             </div>
 
+            {liquidateOpen && (
+                <LiquidateBuildingsModal
+                    myProperties={myProperties}
+                    boardSpaces={boardSpaces}
+                    gameId={gameId}
+                    onClose={() => setLiquidateOpen(false)}
+                />
+            )}
+            {drawnCard && (
+                <ChestCardPopup card={drawnCard} onDismiss={() => setDrawnCard(null)}/>
+            )}
             {incomingTrade && (
                 <IncomingTradeModal offer={incomingTrade} gameId={gameId} onDone={() => setIncomingTrade(null)}/>
             )}
@@ -825,7 +997,6 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
         </div>
     );
 }
-
 
 
 /** Groups an array of property objects (with id, name) by their color from SPACES. */

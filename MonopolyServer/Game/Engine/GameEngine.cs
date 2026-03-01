@@ -1088,12 +1088,12 @@ public class GameEngine
         {
             while (property.HasHotel && player.Cash < targetAmount)
             {
-                SellHotel(property, forced: true);
+                ExecuteSellHotel(property, forced: true);
             }
 
             while (property.HouseCount > 0 && player.Cash < targetAmount)
             {
-                SellHouse(property, forced: true);
+                ExecuteSellHouse(property, forced: true);
             }
         }
 
@@ -1111,9 +1111,50 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Sell a hotel from a property. Returns cash to player at 50% of cost.
+    /// Voluntarily sells the hotel on a property owned by the calling player, refunding 50% of hotel cost.
     /// </summary>
-    private void SellHotel(Property property, bool forced = false)
+    public bool SellHotel(Property property)
+    {
+        if (!property.HasHotel)
+        {
+            return false;
+        }
+
+        var owner = _state.GetPlayerById(property.OwnerId!);
+        if (owner == null)
+        {
+            return false;
+        }
+
+        ExecuteSellHotel(property, forced: false);
+        return true;
+    }
+
+    /// <summary>
+    /// Voluntarily sells one house from a property owned by the calling player, refunding 50% of house cost.
+    /// Hotels must be sold before houses can be sold (call SellHotel first).
+    /// </summary>
+    public bool SellHouse(Property property)
+    {
+        if (property.HouseCount == 0 || property.HasHotel)
+        {
+            return false;
+        }
+
+        var owner = _state.GetPlayerById(property.OwnerId!);
+        if (owner == null)
+        {
+            return false;
+        }
+
+        ExecuteSellHouse(property, forced: false);
+        return true;
+    }
+
+    /// <summary>
+    /// Internal hotel sell — updates property state and refunds owner at 50% of hotel cost.
+    /// </summary>
+    private void ExecuteSellHotel(Property property, bool forced = false)
     {
         if (!property.HasHotel)
         {
@@ -1138,9 +1179,9 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Sell a house from a property. Returns cash to player at 50% of cost.
+    /// Internal house sell — decrements house count and refunds owner at 50% of house cost.
     /// </summary>
-    private void SellHouse(Property property, bool forced = false)
+    private void ExecuteSellHouse(Property property, bool forced = false)
     {
         if (property.HouseCount == 0)
         {

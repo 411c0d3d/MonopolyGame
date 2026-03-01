@@ -175,7 +175,10 @@ public class GameHub : Hub
             return;
         }
 
-        var (_, _, total, _, sentToJail) = engine.RollDice();
+        var (d1, d2, total, _, sentToJail) = engine.RollDice();
+
+        // Broadcast actual dice values so clients can sync their visual display
+        await Clients.Group(gameId).SendAsync("DiceRolled", d1, d2);
 
         if (sentToJail)
         {
@@ -332,6 +335,128 @@ public class GameHub : Hub
         {
             _logger.LogError(ex, "Error building hotel in game {GameId}", gameId);
             await Clients.Caller.SendAsync("Error", "Failed to build hotel");
+        }
+    }
+
+    /// <summary>
+    /// Sells the hotel on the specified property, returning 50% of hotel cost to the player.
+    /// The hotel is replaced with 4 houses per standard Monopoly rules.
+    /// </summary>
+    public async Task SellHotel(string gameId, int propertyId)
+    {
+        try
+        {
+            var (isPropValid, propErr) = _validator.ValidatePropertyId(propertyId);
+            if (!isPropValid)
+            {
+                await Clients.Caller.SendAsync("Error", propErr);
+                return;
+            }
+
+            var game = _roomManager.GetGame(gameId);
+            var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
+            if (!isValid || currentPlayer == null || game == null)
+            {
+                await Clients.Caller.SendAsync("Error", error);
+                return;
+            }
+
+            var property = game.Board.GetProperty(propertyId);
+            if (property.OwnerId != currentPlayer.Id)
+            {
+                await Clients.Caller.SendAsync("Error", "You do not own this property");
+                return;
+            }
+
+            if (!property.HasHotel)
+            {
+                await Clients.Caller.SendAsync("Error", "This property does not have a hotel");
+                return;
+            }
+
+            var engine = _roomManager.GetGameEngine(gameId);
+            if (engine == null)
+            {
+                await Clients.Caller.SendAsync("Error", "Game engine not available");
+                return;
+            }
+
+            if (!engine.SellHotel(property))
+            {
+                await Clients.Caller.SendAsync("Error", "Cannot sell hotel on this property");
+                return;
+            }
+
+            await PersistAndBroadcast(gameId, game);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error selling hotel in game {GameId}", gameId);
+            await Clients.Caller.SendAsync("Error", "Failed to sell hotel");
+        }
+    }
+
+    /// <summary>
+    /// Sells one house from the specified property, returning 50% of house cost to the player.
+    /// A hotel must be sold before houses can be sold.
+    /// </summary>
+    public async Task SellHouse(string gameId, int propertyId)
+    {
+        try
+        {
+            var (isPropValid, propErr) = _validator.ValidatePropertyId(propertyId);
+            if (!isPropValid)
+            {
+                await Clients.Caller.SendAsync("Error", propErr);
+                return;
+            }
+
+            var game = _roomManager.GetGame(gameId);
+            var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
+            if (!isValid || currentPlayer == null || game == null)
+            {
+                await Clients.Caller.SendAsync("Error", error);
+                return;
+            }
+
+            var property = game.Board.GetProperty(propertyId);
+            if (property.OwnerId != currentPlayer.Id)
+            {
+                await Clients.Caller.SendAsync("Error", "You do not own this property");
+                return;
+            }
+
+            if (property.HasHotel)
+            {
+                await Clients.Caller.SendAsync("Error", "Sell the hotel before selling houses");
+                return;
+            }
+
+            if (property.HouseCount == 0)
+            {
+                await Clients.Caller.SendAsync("Error", "This property has no houses to sell");
+                return;
+            }
+
+            var engine = _roomManager.GetGameEngine(gameId);
+            if (engine == null)
+            {
+                await Clients.Caller.SendAsync("Error", "Game engine not available");
+                return;
+            }
+
+            if (!engine.SellHouse(property))
+            {
+                await Clients.Caller.SendAsync("Error", "Cannot sell house on this property");
+                return;
+            }
+
+            await PersistAndBroadcast(gameId, game);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error selling house in game {GameId}", gameId);
+            await Clients.Caller.SendAsync("Error", "Failed to sell house");
         }
     }
 

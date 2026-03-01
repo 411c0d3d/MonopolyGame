@@ -12,6 +12,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.5/signalr.min.js"></script>
 
     <link rel="stylesheet" href="css/main.css"/>
+    <link rel="stylesheet" href="animation/animation.css" />
 </head>
 <body>
 <div id="root"></div>
@@ -20,6 +21,7 @@
     Load order is critical — each file relies on globals declared before it.
     Babel transpiles JSX at runtime via type="text/babel".
 -->
+<script type="text/babel" src="animation/animation.js"></script>
 <script type="text/babel" src="utils/constants.js"></script>
 <script type="text/babel" src="utils/hub_service.js"></script>
 <script type="text/babel" src="components/header.js"></script>

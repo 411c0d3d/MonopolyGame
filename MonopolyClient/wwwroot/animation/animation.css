@@ -1,0 +1,242 @@
+/* animations.css — Game animation styles.
+   Load this stylesheet before animations.js and board.js.
+   --card-accent is overridden inline per card instance via React style prop.    */
+
+:root {
+    --card-accent: #6b7280;
+}
+
+/* ─── Dice ────────────────────────────────────────────────────────────────── */
+
+.die {
+    width: 48px;
+    height: 48px;
+    background: #fff;
+    border: 2px solid #e5e7eb;
+    border-radius: 10px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    padding: 6px;
+    gap: 3px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    transition: transform 0.1s ease;
+}
+
+.die.roll {
+    animation: diceRoll 0.7s ease;
+}
+
+@keyframes diceRoll {
+    0%   { transform: rotate(0deg)   scale(1);    }
+    15%  { transform: rotate(-18deg) scale(1.08); }
+    35%  { transform: rotate(22deg)  scale(0.95); }
+    55%  { transform: rotate(-12deg) scale(1.05); }
+    75%  { transform: rotate(10deg)  scale(0.98); }
+    100% { transform: rotate(0deg)   scale(1);    }
+}
+
+.pip {
+    width: 100%;
+    aspect-ratio: 1;
+    background: #1f2937;
+    border-radius: 50%;
+    transition: opacity 0.06s;
+}
+
+.pip.off {
+    opacity: 0;
+}
+
+.doubles-badge {
+    color: var(--gold, #d97706);
+    font-weight: 700;
+    font-size: 12px;
+    background: rgba(217, 119, 6, 0.12);
+    padding: 2px 7px;
+    border-radius: 20px;
+    animation: badgePop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes badgePop {
+    from { transform: scale(0); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+}
+
+/* ─── Player token hop ────────────────────────────────────────────────────── */
+/*
+  Transition duration matches HOP_INTERVAL_MS (180ms) in animations.js.
+  If you change that constant, update the values below to match.
+*/
+
+.player-token {
+    transition:
+            top    162ms cubic-bezier(0.22, 0.61, 0.36, 1),
+            left   162ms cubic-bezier(0.22, 0.61, 0.36, 1),
+            bottom 162ms cubic-bezier(0.22, 0.61, 0.36, 1),
+            right  162ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    animation: tokenHop 180ms ease-in-out;
+}
+
+@keyframes tokenHop {
+    0%   { transform: translateY(0)     scale(1);    }
+    40%  { transform: translateY(-10px) scale(1.15); }
+    70%  { transform: translateY(-4px)  scale(1.05); }
+    100% { transform: translateY(0)     scale(1);    }
+}
+
+/* ─── Chest / Chance card popup ───────────────────────────────────────────── */
+
+.card-popup-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 700;
+    backdrop-filter: blur(3px);
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.card-popup {
+    background: #fff;
+    border-radius: 16px;
+    width: 320px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    animation: cardSlideUp 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+@keyframes cardSlideUp {
+    from { transform: translateY(40px) scale(0.9); opacity: 0; }
+    to   { transform: translateY(0)    scale(1);   opacity: 1; }
+}
+
+.card-popup-progress {
+    width: 100%;
+    height: 4px;
+    background: #e5e7eb;
+    overflow: hidden;
+}
+
+.card-popup-progress-bar {
+    width: 100%;
+    height: 100%;
+    background: var(--card-accent);
+    transform-origin: left;
+    transform: scaleX(1);
+}
+
+.card-popup-header {
+    width: 100%;
+    background: var(--card-accent);
+    padding: 10px 0;
+    text-align: center;
+}
+
+.card-popup-type {
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.card-popup-icon {
+    font-size: 52px;
+    margin: 24px 0 16px;
+    animation: iconBounce 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s both;
+}
+
+@keyframes iconBounce {
+    from { transform: scale(0); }
+    to   { transform: scale(1); }
+}
+
+.card-popup-text {
+    font-size: 15px;
+    color: #1f2937;
+    text-align: center;
+    padding: 0 24px;
+    line-height: 1.5;
+    font-weight: 500;
+    min-height: 48px;
+}
+
+.card-popup-amount {
+    margin-top: 14px;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+}
+
+.card-popup-amount.positive { color: #10b981; }
+.card-popup-amount.negative { color: #ef4444; }
+
+.card-popup-dismiss {
+    margin: 20px;
+    padding: 8px 28px;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 8px;
+    background: transparent;
+    color: #6b7280;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.card-popup-dismiss:hover {
+    background: #f3f4f6;
+    color: #111827;
+}
+
+/* ─── Board cell card layout (non-property cells) ─────────────────────────── */
+/*
+  Used by Railroad, Utility, Tax, corner squares, etc.
+  Structure: name at top → icon centred → price at bottom.
+  Property (Street) cells keep their colour bar at top — unaffected.
+*/
+
+.cell-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    height: 100%;
+    padding: 3px 2px;
+    text-align: center;
+}
+
+.cell-card-name {
+    font-size: 7px;
+    font-weight: 700;
+    line-height: 1.2;
+    color: #1f2937;
+    width: 100%;
+    text-align: center;
+    word-break: break-word;
+}
+
+.cell-card-icon {
+    font-size: 18px;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.cell-card-price {
+    font-size: 7px;
+    font-weight: 700;
+    color: #374151;
+    width: 100%;
+    text-align: center;
+}

@@ -27,6 +27,7 @@ class HubService {
             'TurnWarning',
             'GameCreated',
             'GameRemoved',
+            'DiceRolled',
         ];
 
         events.forEach(evt => {
