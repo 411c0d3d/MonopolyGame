@@ -75,6 +75,9 @@ public class BotTurnOrchestrator
     // Core turn loop
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// Executes the full bot turn sequence with lock protection and guaranteed turn progression.
+    /// </summary>
     private async Task ExecuteBotTurnAsync(string gameId)
     {
         var gameLock = _gameLocks.GetOrAdd(gameId, _ => new SemaphoreSlim(1, 1));
@@ -93,106 +96,18 @@ public class BotTurnOrchestrator
                 return;
             }
 
-            // --- Jail handling ---
-            if (bot.IsInJail)
-            {
-                bool stillInJail = await HandleJailAsync(gameId, game, engine, bot);
-                await Task.Delay(ActionDelayMs);
-
-                if (!TryGetBotContext(gameId, out game, out engine, out bot))
-                {
-                    return;
-                }
-
-                if (stillInJail || bot.IsInJail)
-                {
-                    // Failed escape roll — turn is over
-                    engine.NextTurn();
-                    await BroadcastAsync(gameId, game);
-                    return;
-                }
-
-                // UseCard or PayBail — fall through to roll loop below
-            }
-
-            // --- Roll loop (handles consecutive doubles) ---
-            await Task.Delay(ActionDelayMs);
-            if (!TryGetBotContext(gameId, out game, out engine, out bot))
-            {
-                return;
-            }
-
-            if (game.Status != GameStatus.InProgress)
-            {
-                return;
-            }
-
-            bool keepRolling = true;
-            while (keepRolling)
-            {
-                var (_, _, total, isDouble, sentToJail) = engine.RollDice();
-
-                if (sentToJail)
-                {
-                    engine.NextTurn();
-                    await BroadcastAsync(gameId, game);
-                    return;
-                }
-
-                engine.MovePlayer(total);
-                await BroadcastAsync(gameId, game);
-                await Task.Delay(ShortDelayMs);
-
-                if (!TryGetBotContext(gameId, out game, out engine, out bot))
-                {
-                    return;
-                }
-
-                if (game.Status != GameStatus.InProgress)
-                {
-                    return;
-                }
-
-                HandlePropertyDecision(game, engine, bot);
-
-                keepRolling = isDouble && !bot.IsInJail;
-
-                if (keepRolling)
-                {
-                    await Task.Delay(ActionDelayMs);
-                    if (!TryGetBotContext(gameId, out game, out engine, out bot))
-                    {
-                        return;
-                    }
-
-                    if (game.Status != GameStatus.InProgress)
-                    {
-                        return;
-                    }
-                }
-            }
-
-            // --- Post-roll asset management ---
-            if (!TryGetBotContext(gameId, out game, out engine, out bot))
-            {
-                return;
-            }
-
-            HandleProactiveMortgaging(game, engine, bot);
-            HandleUnmortgaging(game, engine, bot);
-            HandleBuilding(game, engine, bot);
-
-            // --- Trade processing ---
-            await HandleOutgoingTradesAsync(gameId, game, bot);
-            HandleIncomingTrades(gameId, game, bot);
-
-            // Broadcast final state before ending turn
-            await BroadcastAsync(gameId, game);
-            await Task.Delay(ShortDelayMs);
+            await RunBotTurnLogicAsync(gameId, game, engine, bot);
 
             // --- End turn ---
-            engine.NextTurn();
-            await BroadcastAsync(gameId, game);
+            // Even if the bot went bankrupt and exited early, ensure the game progresses.
+            if (game.Status == GameStatus.InProgress)
+            {
+                engine.NextTurn();
+                await BroadcastAsync(gameId, game);
+
+                // Crucial: Wake up the next player if they are also a bot.
+                TryScheduleIfBotTurn(gameId, game);
+            }
         }
         finally
         {
@@ -200,13 +115,100 @@ public class BotTurnOrchestrator
         }
     }
 
+    /// <summary>
+    /// Executes turn steps allowing safe drop-outs if context invalidates.
+    /// </summary>
+    private async Task RunBotTurnLogicAsync(string gameId, GameState game, GameEngine engine, Player bot)
+    {
+        bool alreadyRolledInJail = false;
+
+        // --- Jail handling ---
+        if (bot.IsInJail)
+        {
+            bool stillInJail = await HandleJailAsync(gameId, game, engine, bot);
+            await Task.Delay(ActionDelayMs);
+
+            if (!TryGetBotContext(gameId, out game, out engine, out bot))
+            {
+                return;
+            }
+
+            if (stillInJail || bot.IsInJail)
+            {
+                return; // Failed escape roll — turn is over
+            }
+
+            if (bot.HasRolledDice)
+            {
+                alreadyRolledInJail = true;
+            }
+        }
+
+        // --- Roll loop (handles consecutive doubles) ---
+        await Task.Delay(ActionDelayMs);
+        if (!TryGetBotContext(gameId, out game, out engine, out bot))
+        {
+            return;
+        }
+
+        bool keepRolling = !alreadyRolledInJail;
+        while (keepRolling)
+        {
+            var (_, _, total, isDouble, sentToJail) = engine.RollDice();
+
+            if (sentToJail)
+            {
+                return;
+            }
+
+            engine.MovePlayer(total);
+            await BroadcastAsync(gameId, game);
+            await Task.Delay(ShortDelayMs);
+
+            if (!TryGetBotContext(gameId, out game, out engine, out bot))
+            {
+                return;
+            }
+
+            HandlePropertyDecision(game, engine, bot);
+
+            keepRolling = isDouble && !bot.IsInJail;
+
+            if (keepRolling)
+            {
+                await Task.Delay(ActionDelayMs);
+                if (!TryGetBotContext(gameId, out game, out engine, out bot))
+                {
+                    return;
+                }
+            }
+        }
+
+        // --- Post-roll asset management ---
+        if (!TryGetBotContext(gameId, out game, out engine, out bot))
+        {
+            return;
+        }
+
+        HandleProactiveMortgaging(game, engine, bot);
+        HandleUnmortgaging(game, engine, bot);
+        HandleBuilding(game, engine, bot);
+
+        // --- Trade processing ---
+        await HandleOutgoingTradesAsync(gameId, game, bot);
+        HandleIncomingTrades(gameId, game, bot);
+
+        // Broadcast final state before ending turn
+        await BroadcastAsync(gameId, game);
+        await Task.Delay(ShortDelayMs);
+    }
+
     // -------------------------------------------------------------------------
     // Jail
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Executes the bot's jail strategy. Returns true if the bot is still in jail after this action
-    /// (i.e. failed a doubles roll and the turn should end).
+    /// Executes the bot's jail strategy and returns true if still in jail.
     /// </summary>
     private async Task<bool> HandleJailAsync(string gameId, GameState game, GameEngine engine, Player bot)
     {
@@ -244,7 +246,7 @@ public class BotTurnOrchestrator
                 }
 
                 await BroadcastAsync(gameId, game);
-                return true; // Still in jail
+                return true;
         }
     }
 
@@ -252,6 +254,9 @@ public class BotTurnOrchestrator
     // Property decisions
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// Decides whether to buy or decline an available property.
+    /// </summary>
     private void HandlePropertyDecision(GameState game, GameEngine engine, Player bot)
     {
         var property = game.Board.GetProperty(bot.Position);
@@ -270,6 +275,9 @@ public class BotTurnOrchestrator
         }
     }
 
+    /// <summary>
+    /// Checks if a property is eligible for purchase.
+    /// </summary>
     private static bool IsPropertyBuyable(Property property)
     {
         return property.OwnerId == null &&
@@ -282,6 +290,9 @@ public class BotTurnOrchestrator
     // Mortgage management
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// Mortgages properties proactively if cash is critically low.
+    /// </summary>
     private void HandleProactiveMortgaging(GameState game, GameEngine engine, Player bot)
     {
         var candidates = game.Board.GetPropertiesByOwner(bot.Id)
@@ -294,6 +305,9 @@ public class BotTurnOrchestrator
         }
     }
 
+    /// <summary>
+    /// Unmortgages properties if sufficient surplus cash exists.
+    /// </summary>
     private void HandleUnmortgaging(GameState game, GameEngine engine, Player bot)
     {
         var candidates = game.Board.GetPropertiesByOwner(bot.Id)
@@ -310,6 +324,9 @@ public class BotTurnOrchestrator
     // Building
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// Builds houses and hotels evenly on monopolies.
+    /// </summary>
     private void HandleBuilding(GameState game, GameEngine engine, Player bot)
     {
         var monopolies = game.Board.GetPropertiesByOwner(bot.Id)
@@ -333,7 +350,7 @@ public class BotTurnOrchestrator
                     if (_decisions.ShouldBuildHouse(bot, prop, game) && engine.BuildHouse(prop))
                     {
                         built = true;
-                        break; // Re-sort after each build to maintain even-build rule
+                        break;
                     }
 
                     if (_decisions.ShouldBuildHotel(bot, prop, game) && engine.BuildHotel(prop))
@@ -350,6 +367,9 @@ public class BotTurnOrchestrator
     // Trades
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// Proposes generated trades to other players.
+    /// </summary>
     private async Task HandleOutgoingTradesAsync(string gameId, GameState game, Player bot)
     {
         var proposals = _decisions.GenerateTradeProposals(bot, game);
@@ -371,6 +391,9 @@ public class BotTurnOrchestrator
         }
     }
 
+    /// <summary>
+    /// Evaluates and responds to incoming trade offers.
+    /// </summary>
     private void HandleIncomingTrades(string gameId, GameState game, Player bot)
     {
         var incoming = game.PendingTrades
@@ -395,8 +418,7 @@ public class BotTurnOrchestrator
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Attempts to load current bot context. Returns false if the game is gone,
-    /// finished, or the current player is no longer a live bot.
+    /// Attempts to load current active bot context.
     /// </summary>
     private bool TryGetBotContext(
         string gameId,
@@ -417,12 +439,18 @@ public class BotTurnOrchestrator
         return bot.IsBot && !bot.IsBankrupt;
     }
 
+    /// <summary>
+    /// Saves the game state and broadcasts it to connected clients.
+    /// </summary>
     private async Task BroadcastAsync(string gameId, GameState game)
     {
         await _roomManager.SaveGameAsync(gameId);
         await _hubContext.Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
     }
 
+    /// <summary>
+    /// Serializes a trade offer to a DTO.
+    /// </summary>
     private static TradeOfferDto SerializeTradeOffer(TradeOffer t, GameState g) => new()
     {
         Id = t.Id,
