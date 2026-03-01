@@ -187,7 +187,7 @@ function Die({value, rolling}) {
 }
 
 /**
- * Full dice tray with two dice, sum label, and doubles callout.
+ * Full dice tray: dice row with sum on the right, doubles label in reserved slot below.
  * @param {{ dice: number[], rolling: boolean }} props
  */
 function DiceTray({dice, rolling}) {
@@ -197,17 +197,18 @@ function DiceTray({dice, rolling}) {
 
     return (
         <div className="dice-area">
-            <Die value={d1} rolling={rolling}/>
-            <Die value={d2} rolling={rolling}/>
-            {hasResult && (
-                <div
-                    style={{fontSize: 13, color: '#aaa', marginLeft: 8, display: 'flex', alignItems: 'center', gap: 6}}>
-                    <span>= {d1 + d2}</span>
-                    {isDoubles && (
-                        <span className="doubles-badge">Doubles!</span>
-                    )}
+            {/* Dice + sum on one row */}
+            <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                <Die value={d1} rolling={rolling}/>
+                <Die value={d2} rolling={rolling}/>
+                <div style={{fontSize: 'clamp(10px, 2cqw, 16px)', color: '#888', fontWeight: 700, minWidth: '2em', textAlign: 'left'}}>
+                    {hasResult ? `= ${d1 + d2}` : '\u00A0\u00A0\u00A0'}
                 </div>
-            )}
+            </div>
+            {/* Reserved slot — always present, shows "Doubles!" or invisible spacer */}
+            <div className="board-dice-doubles-slot">
+                {isDoubles ? <span className="doubles-badge">Doubles!</span> : '\u00A0'}
+            </div>
         </div>
     );
 }

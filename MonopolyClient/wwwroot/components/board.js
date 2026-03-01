@@ -1,23 +1,23 @@
-/* globals useState, useEffect, useRef, useCallback, COLORS, BCOLORS, SPACES, React */
+/* globals useState, useEffect, useRef, useCallback, COLORS, BCOLORS, SPACES, React, DiceTray */
 
 /**
- * Renders the Monopoly board with player tokens and property ownership.
- * Tokens are rendered in an absolute overlay so the same DOM element persists
- * across position changes — enabling CSS transition-based hop animation.
- * @param {{ board: any[], players: any[], animatedPositions: Object }} props
+ * Renders the Monopoly board with player tokens, property ownership, inline dice, and action panel.
+ * @param {{ board: any[], players: any[], animatedPositions: Object, dice: number[], rolling: boolean, actionPanel: any }} props
  */
-function Board({board, players, animatedPositions = {}}) {
+function Board({board, players, animatedPositions = {}, dice = [], rolling = false, actionPanel = null}) {
     const [inspectSpace, setInspectSpace] = useState(null);
     const wrapRef = useRef(null);
     const cellRefs = useRef({});
     const [cellPos, setCellPos] = useState({});
+    const [boardWidth, setBoardWidth] = useState(520);
 
-    /** Re-measures all registered cell bounding rects relative to the board wrapper. */
+    /** Re-measures all cell bounding rects and captures board width for inline scaling. */
     const measureCells = useCallback(() => {
         if (!wrapRef.current) {
             return;
         }
         const wrap = wrapRef.current.getBoundingClientRect();
+        setBoardWidth(wrap.width || 520);
         const next = {};
         Object.entries(cellRefs.current).forEach(([id, el]) => {
             if (!el) {
@@ -38,9 +38,16 @@ function Board({board, players, animatedPositions = {}}) {
         return () => ro.disconnect();
     }, [measureCells]);
 
+    // Scale factor relative to 520px baseline
+    const bs = boardWidth / 520;
+
+    // Token sizing derived from board scale
+    const tokSize = Math.max(10, Math.round(14 * bs));
+    const tokFont = Math.max(6, Math.round(7 * bs));
+    const tokStack = Math.round(16 * bs);
+
     const activePlayers = players || [];
 
-    // Group players by current display position for token stacking offset
     const playersByPos = {};
     activePlayers.forEach((p, i) => {
         const pos = animatedPositions[p.id] ?? p.position;
@@ -99,13 +106,20 @@ function Board({board, players, animatedPositions = {}}) {
         return '';
     };
 
-    /** Returns the price label for any purchasable or taxable space. */
-    const getCellPrice = (space, boardSpace) => {
+    /** Returns the price label or non-breaking space so the price slot is always filled. */
+    const getPriceDisplay = (space, boardSpace) => {
         const price = boardSpace?.purchasePrice || space.price || space.amount || space.tax;
-        return price ? `$${price}` : null;
+        return price ? `$${price}` : '\u00A0';
     };
 
-    /** Renders a single board space cell with responsive text and icon positioning. */
+    // Inline font sizes scaled to board width
+    const priceSz = `clamp(5px, ${(1.1 * bs).toFixed(2)}cqw, ${Math.round(8 * bs)}px)`;
+    const stripPriceSz = `clamp(4px, ${(0.9 * bs).toFixed(2)}cqw, ${Math.round(7 * bs)}px)`;
+    const buildingFontLg = Math.max(5, Math.round(7 * bs));
+    const buildingFontSm = Math.max(4, Math.round(6 * bs));
+    const colorBarSz = `${Math.round(12 * bs)}px`;
+
+    /** Renders a single board space cell with scaled text, icons, and price placeholder. */
     const Cell = ({space, layout, style = {}}) => {
         const boardSpace = board?.find(b => b.id === space.id);
         const isStreet = space.type === 'Street';
@@ -114,24 +128,33 @@ function Board({board, players, animatedPositions = {}}) {
         const showPrice = isPurchasable || isTax;
         const isVert = style.flexDirection === 'row' || style.flexDirection === 'row-reverse';
         const icon = getIcon(space);
-        const priceLabel = getCellPrice(space, boardSpace);
+        const priceDisplay = getPriceDisplay(space, boardSpace);
 
         const buildingOverlay = (() => {
             if (!boardSpace) {
                 return null;
             }
             if (boardSpace.hasHotel) {
-                return <span style={{fontSize: 7, lineHeight: 1, userSelect: 'none'}}>🏨</span>;
+                return <span style={{fontSize: buildingFontLg, lineHeight: 1, userSelect: 'none'}}>🏨</span>;
             }
             if (boardSpace.houseCount > 0) {
                 return (
-                    <span style={{fontSize: 6, lineHeight: 1, letterSpacing: '-1px', userSelect: 'none'}}>
-                    {'🏠'.repeat(boardSpace.houseCount)}
-                </span>
+                    <span style={{fontSize: buildingFontSm, lineHeight: 1, letterSpacing: '-1px', userSelect: 'none'}}>
+                        {'🏠'.repeat(boardSpace.houseCount)}
+                    </span>
                 );
             }
             return null;
         })();
+
+        const priceStyle = {fontSize: priceSz, fontWeight: 800, opacity: showPrice ? 1 : 0};
+        const stripPriceStyleV = {
+            writingMode: 'vertical-rl',
+            fontWeight: 800,
+            fontSize: stripPriceSz,
+            padding: '0 2px',
+            opacity: showPrice ? 1 : 0
+        };
 
         let bnameContent;
 
@@ -152,12 +175,7 @@ function Board({board, players, animatedPositions = {}}) {
                             transform: 'rotate(180deg)',
                             textAlign: 'center'
                         }}>{space.name}</div>
-                        {priceLabel && <div style={{
-                            writingMode: 'vertical-rl',
-                            transform: 'rotate(180deg)',
-                            fontWeight: 800,
-                            fontSize: 'clamp(5px, 0.6vw, 8px)'
-                        }}>{priceLabel}</div>}
+                        <div style={{...stripPriceStyleV, transform: 'rotate(180deg)', opacity: 1}}>{priceDisplay}</div>
                     </div>
                 );
             } else if (layout === 'right') {
@@ -171,11 +189,7 @@ function Board({board, players, animatedPositions = {}}) {
                         alignItems: 'center',
                         padding: '2px'
                     }}>
-                        {priceLabel && <div style={{
-                            writingMode: 'vertical-rl',
-                            fontWeight: 800,
-                            fontSize: 'clamp(5px, 0.6vw, 8px)'
-                        }}>{priceLabel}</div>}
+                        <div style={{...stripPriceStyleV, opacity: 1}}>{priceDisplay}</div>
                         <div style={{writingMode: 'vertical-rl', textAlign: 'center'}}>{space.name}</div>
                     </div>
                 );
@@ -196,8 +210,7 @@ function Board({board, players, animatedPositions = {}}) {
                             wordBreak: 'break-word',
                             overflowWrap: 'break-word'
                         }}>{space.name}</div>
-                        {priceLabel &&
-                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>{priceLabel}</div>}
+                        <div style={{...priceStyle, opacity: 1}}>{priceDisplay}</div>
                     </div>
                 );
             } else {
@@ -217,13 +230,11 @@ function Board({board, players, animatedPositions = {}}) {
                             wordBreak: 'break-word',
                             overflowWrap: 'break-word'
                         }}>{space.name}</div>
-                        {priceLabel &&
-                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>{priceLabel}</div>}
+                        <div style={{...priceStyle, opacity: 1}}>{priceDisplay}</div>
                     </div>
                 );
             }
         } else {
-            // Non-street: name at top → icon centred → price at bottom (all layouts)
             if (layout === 'left') {
                 bnameContent = (
                     <div style={{
@@ -238,15 +249,7 @@ function Board({board, players, animatedPositions = {}}) {
                         <div style={{flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
                             <div className="bicon" style={{transform: 'rotate(-90deg)'}}>{icon}</div>
                         </div>
-                        {showPrice && priceLabel && (
-                            <div style={{
-                                writingMode: 'vertical-rl',
-                                transform: 'rotate(180deg)',
-                                fontWeight: 800,
-                                fontSize: 'clamp(4px, 0.55vw, 7px)',
-                                padding: '0 2px'
-                            }}>{priceLabel}</div>
-                        )}
+                        <div style={{...stripPriceStyleV, transform: 'rotate(180deg)'}}>{priceDisplay}</div>
                     </div>
                 );
             } else if (layout === 'right') {
@@ -258,14 +261,7 @@ function Board({board, players, animatedPositions = {}}) {
                         height: '100%',
                         alignItems: 'center'
                     }}>
-                        {showPrice && priceLabel && (
-                            <div style={{
-                                writingMode: 'vertical-rl',
-                                fontWeight: 800,
-                                fontSize: 'clamp(4px, 0.55vw, 7px)',
-                                padding: '0 2px'
-                            }}>{priceLabel}</div>
-                        )}
+                        <div style={stripPriceStyleV}>{priceDisplay}</div>
                         <div style={{flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
                             <div className="bicon" style={{transform: 'rotate(90deg)'}}>{icon}</div>
                         </div>
@@ -273,7 +269,6 @@ function Board({board, players, animatedPositions = {}}) {
                     </div>
                 );
             } else if (layout === 'bottom') {
-                // Fixed: was icon→name→price, corrected to name→icon→price
                 bnameContent = (
                     <div style={{
                         display: 'flex',
@@ -285,18 +280,16 @@ function Board({board, players, animatedPositions = {}}) {
                         padding: '3px 2px'
                     }}>
                         <div style={{
-                            fontSize: 'clamp(4px, 0.55vw, 6px)',
+                            fontSize: stripPriceSz,
                             fontWeight: 700,
                             textAlign: 'center',
                             lineHeight: 1.1
                         }}>{space.name}</div>
                         <div className="bicon">{icon}</div>
-                        {showPrice && priceLabel &&
-                            <div style={{fontSize: 'clamp(4px, 0.55vw, 6px)', fontWeight: 800}}>{priceLabel}</div>}
+                        <div style={priceStyle}>{priceDisplay}</div>
                     </div>
                 );
             } else {
-                // top: name→icon→price (already was correct)
                 bnameContent = (
                     <div style={{
                         display: 'flex',
@@ -308,14 +301,13 @@ function Board({board, players, animatedPositions = {}}) {
                         padding: '3px 2px'
                     }}>
                         <div style={{
-                            fontSize: 'clamp(4px, 0.55vw, 6px)',
+                            fontSize: stripPriceSz,
                             fontWeight: 700,
                             textAlign: 'center',
                             lineHeight: 1.1
                         }}>{space.name}</div>
                         <div className="bicon">{icon}</div>
-                        {showPrice && priceLabel &&
-                            <div style={{fontSize: 'clamp(4px, 0.55vw, 6px)', fontWeight: 800}}>{priceLabel}</div>}
+                        <div style={priceStyle}>{priceDisplay}</div>
                     </div>
                 );
             }
@@ -330,8 +322,8 @@ function Board({board, players, animatedPositions = {}}) {
                 {space.color && (
                     <div className="bcolor" style={{
                         background: BCOLORS[space.color] || '#ccc',
-                        width: isVert ? '12px' : '100%',
-                        height: isVert ? '100%' : '12px',
+                        width: isVert ? colorBarSz : '100%',
+                        height: isVert ? '100%' : colorBarSz,
                         flexShrink: 0,
                         display: 'flex',
                         alignItems: 'center',
@@ -500,14 +492,66 @@ function Board({board, players, animatedPositions = {}}) {
 
                 {/* Center */}
                 <div className="bcenter">
-                    <div style={{
-                        fontFamily: 'Playfair Display,serif',
-                        fontSize: 'clamp(11px,2vw,19px)',
-                        fontWeight: 900,
-                        textAlign: 'center'
-                    }}>MONOPOLY
+                    {/* Title */}
+                    <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0}}>
+                        <div style={{
+                            fontFamily: 'Playfair Display,serif',
+                            fontSize: 'clamp(14px, 3cqw, 28px)',
+                            fontWeight: 900,
+                            textAlign: 'center',
+                            letterSpacing: '0.05em'
+                        }}>
+                            MONOPOLY
+                        </div>
+                        <div style={{
+                            fontSize: 'clamp(7px, 1.3cqw, 12px)',
+                            color: '#aaa',
+                            letterSpacing: '0.15em',
+                            textTransform: 'uppercase'
+                        }}>Online Edition
+                        </div>
                     </div>
-                    <div style={{fontSize: 8, color: '#bbb', marginTop: 2}}>Online Edition</div>
+
+                    {/* Dice — sum right, doubles below */}
+                    {(dice[0] && dice[1])
+                        ? <DiceTray dice={dice} rolling={rolling}/>
+                        : (
+                            <div className="darea" style={{opacity: 0.3}}>
+                                <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                                    <div className="die">
+                                        {[false, false, false, false, true, false, false, false, false].map((on, i) => (
+                                            <div key={i} className={`pip${on ? '' : ' off'}`}/>
+                                        ))}
+                                    </div>
+                                    <div className="die">
+                                        {[false, false, false, false, true, false, false, false, false].map((on, i) => (
+                                            <div key={i} className={`pip${on ? '' : ' off'}`}/>
+                                        ))}
+                                    </div>
+                                    <div style={{
+                                        fontSize: 'clamp(10px, 2cqw, 16px)',
+                                        color: '#888',
+                                        fontWeight: 700,
+                                        minWidth: '2em'
+                                    }}>&nbsp;&nbsp;&nbsp;</div>
+                                </div>
+                                <div className="board-dice-doubles-slot">&nbsp;</div>
+                            </div>
+                        )
+                    }
+
+                    {/* Action panel */}
+                    {actionPanel}
+
+                    {/* Divider */}
+                    <div style={{
+                        width: '65%',
+                        height: '1px',
+                        background: 'rgba(0,0,0,0.08)',
+                        margin: 'clamp(3px, 0.6cqw, 6px) 0'
+                    }}/>
+
+                    {/* Card stacks — 25% bigger than previous */}
                     <div className="board-card-stacks">
                         <div className="board-card-stack">
                             <div className="card-deck">
@@ -537,10 +581,7 @@ function Board({board, players, animatedPositions = {}}) {
                 </div>
             </div>
 
-            {/*
-              Token overlay — each player has one persistent DOM element whose top/left
-              transitions smoothly as animatedPositions steps through cells one by one.
-            */}
+            {/* Token overlay — persistent DOM elements with CSS-transitioned position */}
             {activePlayers.map((p, i) => {
                 const displayPos = animatedPositions[p.id] ?? p.position;
                 const cell = cellPos[displayPos];
@@ -556,13 +597,13 @@ function Board({board, players, animatedPositions = {}}) {
                         title={p.name}
                         style={{
                             position: 'absolute',
-                            top: cell.y + 3 + stackIdx * 14,
-                            left: cell.x + cell.w - 17,
+                            top: cell.y + 3 + stackIdx * tokStack,
+                            left: cell.x + cell.w - tokSize - 2,
                             background: COLORS[i % COLORS.length],
                             color: '#fff',
-                            width: 14,
-                            height: 14,
-                            fontSize: 7,
+                            width: tokSize,
+                            height: tokSize,
+                            fontSize: tokFont,
                             zIndex: 10,
                             pointerEvents: 'none',
                         }}

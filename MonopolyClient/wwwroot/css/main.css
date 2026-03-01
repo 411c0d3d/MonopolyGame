@@ -115,8 +115,15 @@ h1, h2, h3 {
 
 .glayout {
     display: grid;
-    grid-template-columns: 245px 1fr 245px;
+    grid-template-columns: 200px 1fr 260px;
+    grid-template-rows: 1fr;
     height: calc(100vh - 56px);
+    --log-extra: 0px;
+}
+
+.glayout.show-log {
+    grid-template-columns: 200px 1fr 260px 260px;
+    --log-extra: 260px;
 }
 
 .gsl {
@@ -126,17 +133,20 @@ h1, h2, h3 {
     display: flex;
     flex-direction: column;
     gap: 11px;
+    min-width: 0;
 }
 
 .gmain {
-    overflow-y: auto;
     padding: 15px;
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 13px;
+    justify-content: center;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
 }
 
+/* Properties panel */
 .gsr {
     border-left: 1.5px solid var(--border);
     overflow-y: auto;
@@ -144,6 +154,19 @@ h1, h2, h3 {
     display: flex;
     flex-direction: column;
     gap: 11px;
+    min-width: 0;
+    position: relative;
+}
+
+/* Event log panel — toggled onto the right edge */
+.glog {
+    border-left: 1.5px solid var(--border);
+    overflow-y: auto;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    min-width: 0;
 }
 
 .lobby-grid {
@@ -270,6 +293,12 @@ h1, h2, h3 {
 .btn-sm {
     padding: 4px 10px;
     font-size: 11px;
+}
+
+/* Board center action buttons — 15% larger than btn-sm */
+.btn-board {
+    padding: clamp(4px, 0.7cqw, 6px) clamp(10px, 1.8cqw, 14px);
+    font-size: clamp(10px, 1.8cqw, 13px);
 }
 
 .btn-lg {
@@ -791,10 +820,13 @@ h1, h2, h3 {
    BOARD — isolated section, do not mix with UI styles above
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* Wrapper — capped so dice/actions remain visible at 1080p */
+/* Wrapper — adjusts for event-log panel when shown via --log-extra CSS var */
 .bwrap {
-    width: min(100%, min(520px, calc(100vh - 390px)));
+    width: max(520px, min(calc(100vh - 86px), calc(100vw - 490px - var(--log-extra, 0px))));
+    aspect-ratio: 1;
     margin: 0 auto;
+    container-type: inline-size;
+    container-name: board;
     filter: drop-shadow(0 8px 24px rgba(0, 0, 0, .18));
 }
 
@@ -826,25 +858,24 @@ h1, h2, h3 {
     border: 1px solid rgba(0, 0, 0, .2);
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: center;
     flex-direction: column;
-    font-size: 7px;
+    gap: clamp(2px, 0.5cqw, 5px);
     font-weight: 700;
     text-align: center;
     background: linear-gradient(145deg, #eef8ee, #d9eeda);
     position: relative;
-    padding-bottom: 6px;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4);
 }
 
 .corner-icon {
-    font-size: clamp(12px, 1.8vw, 20px);
-    margin-bottom: 2px;
+    font-size: clamp(14px, 3.5cqw, 30px);
+    line-height: 1;
     filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .2));
 }
 
 .corner-label {
-    font-size: clamp(5px, .65vw, 7px);
+    font-size: clamp(6px, 1.2cqw, 11px);
     font-weight: 800;
     letter-spacing: .4px;
     text-transform: uppercase;
@@ -883,7 +914,7 @@ h1, h2, h3 {
     height: 100%;
     align-items: center;
     justify-content: center;
-    font-size: clamp(4.5px, .72vw, 7px);
+    font-size: clamp(5px, 1.1cqw, 9px);
     font-weight: 600;
     line-height: 1.15;
     overflow: hidden;
@@ -891,7 +922,7 @@ h1, h2, h3 {
 
 /* Medium icon for non-street cells */
 .bicon {
-    font-size: clamp(10px, 1.6vw, 17px);
+    font-size: clamp(10px, 2.8cqw, 24px);
     line-height: 1;
     display: flex;
     align-items: center;
@@ -901,7 +932,7 @@ h1, h2, h3 {
 
 /* Narrow name strip pinned to the outer border on left/right non-street cells */
 .bname-strip {
-    font-size: clamp(4px, .58vw, 6px);
+    font-size: clamp(4px, 0.9cqw, 8px);
     font-weight: 700;
     display: flex;
     align-items: center;
@@ -909,7 +940,7 @@ h1, h2, h3 {
     padding: 2px 1px;
     color: #333;
     flex-shrink: 0;
-    width: clamp(9px, 1.1vw, 13px);
+    width: clamp(9px, 1.8cqw, 16px);
 }
 
 /* Player tokens */
@@ -926,31 +957,55 @@ h1, h2, h3 {
     box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
 }
 
-/* Dice area */
+/* Dice area — column layout, wider padding */
 .darea, .dice-area {
     display: flex;
-    gap: 9px;
+    flex-direction: column;
+    gap: 4px;
     align-items: center;
     justify-content: center;
-    padding: 12px 14px;
+    padding: 8px 18px;
     background: linear-gradient(145deg, #ffffff, #faf8f4);
     border: 1.5px solid var(--border);
-    border-radius: 12px;
+    border-radius: 10px;
     box-shadow: 0 2px 0 var(--border), 0 4px 10px var(--shadow);
 }
 
+/* Reserved slot for doubles label — always occupies space to prevent jitter */
+.board-dice-doubles-slot {
+    height: 16px;
+    font-size: clamp(9px, 1.8cqw, 13px);
+    font-weight: 700;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    letter-spacing: .3px;
+}
+
+.doubles-badge {
+    background: var(--gold);
+    color: var(--ink);
+    font-size: clamp(8px, 1.6cqw, 12px);
+    font-weight: 800;
+    padding: 1px 6px;
+    border-radius: 10px;
+    letter-spacing: .2px;
+}
+
 .die {
-    width: 42px;
-    height: 42px;
+    width: clamp(22px, 4.5cqw, 38px);
+    height: clamp(22px, 4.5cqw, 38px);
     background: linear-gradient(145deg, #fff, #f2efe8);
     border: 2px solid var(--ink);
-    border-radius: 9px;
+    border-radius: 7px;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     grid-template-rows: repeat(3, 1fr);
-    padding: 5px;
+    padding: 3px;
     gap: 2px;
-    box-shadow: 3px 4px 0 var(--ink), 0 2px 6px rgba(0, 0, 0, .1);
+    box-shadow: 2px 3px 0 var(--ink), 0 2px 6px rgba(0, 0, 0, .1);
 }
 
 .die.roll {
@@ -986,7 +1041,7 @@ h1, h2, h3 {
 /* Card stacks in board center */
 .board-card-stacks {
     display: flex;
-    gap: clamp(8px, 1.8vw, 20px);
+    gap: clamp(8px, 1.8cqw, 20px);
     align-items: flex-end;
     justify-content: center;
 }
@@ -999,7 +1054,7 @@ h1, h2, h3 {
 }
 
 .board-card-stack-label {
-    font-size: clamp(4px, .6vw, 6.5px);
+    font-size: clamp(5px, 1.25cqw, 10px);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .4px;
@@ -1008,8 +1063,8 @@ h1, h2, h3 {
 
 .card-deck {
     position: relative;
-    width: clamp(28px, 4vw, 46px);
-    height: clamp(18px, 2.6vw, 30px);
+    width: clamp(35px, 8.1cqw, 70px);
+    height: clamp(22px, 5cqw, 45px);
 }
 
 .card-deck-layer {
@@ -1035,21 +1090,80 @@ h1, h2, h3 {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: clamp(10px, 1.4vw, 16px);
+    font-size: clamp(14px, 3.5cqw, 28px);
     box-shadow: 0 2px 4px rgba(0, 0, 0, .15);
 }
 
 /* ─── Responsive ─────────────────────────────────────────────────────────── */
 
-@media (max-width: 880px) {
-    .glayout {
+/* Log toggle button — sits on the right edge of the properties panel header */
+.log-toggle {
+    position: absolute;
+    top: 12px;
+    right: -13px;
+    width: 24px;
+    height: 24px;
+    background: var(--paper);
+    border: 1.5px solid var(--border);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    cursor: pointer;
+    z-index: 10;
+    box-shadow: 2px 0 6px var(--shadow);
+    transition: background .12s;
+}
+
+.log-toggle:hover {
+    background: var(--cream);
+}
+
+/* Board center action panel */
+.board-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    width: 100%;
+    padding: 0 8px;
+}
+
+.board-actions .action-row {
+    display: flex;
+    gap: 5px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+/* Responsive */
+@media (max-width: 1000px) {
+    .glayout,
+    .glayout.show-log {
         grid-template-columns: 1fr;
+        grid-template-rows: auto;
         height: auto;
+        --log-extra: 0px;
+    }
+
+    .gmain {
+        height: auto;
+        padding: 15px;
     }
 
     .bwrap {
-        width: min(100%, calc(100vw - 20px));
-        max-width: 520px;
+        width: min(calc(100vw - 20px), 520px);
+        aspect-ratio: unset;
+    }
+
+    .log-toggle {
+        display: none;
+    }
+
+    .glog {
+        border-left: none;
+        border-top: 1.5px solid var(--border);
     }
 }
 

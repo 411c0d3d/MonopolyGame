@@ -586,6 +586,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
     const [mortgagePending, setMortgagePending] = useState(null); // { prop, space }
     const [drawnCard, setDrawnCard] = useState(null); // { type, text, amount? }
     const [liquidateOpen, setLiquidateOpen] = useState(false);
+    const [showLog, setShowLog] = useState(false);
 
     const players = gameState?.players || [];
     const animatedPositions = usePlayerHop(players);
@@ -670,8 +671,8 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                 </div>
             )}
 
-            <div className="glayout">
-                {/* LEFT: Players */}
+            <div className={`glayout${showLog ? ' show-log' : ''}`}>
+                {/* LEFT: Players + Info + Trade */}
                 <div className="gsl">
                     <div className="slabel">Players</div>
                     {players.map((player, i) => (
@@ -686,16 +687,9 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                 {player.name[0]}
                             </div>
                             <div style={{flex: 1, minWidth: 0}}>
-                                <div style={{
-                                    fontWeight: 600,
-                                    fontSize: 11,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 4
-                                }}>
+                                <div style={{fontWeight: 600, fontSize: 11, display: 'flex', alignItems: 'center', gap: 4}}>
                                     {player.name}
-                                    {player.name === playerName &&
-                                        <span style={{fontSize: 9, color: '#bbb'}}>(you)</span>}
+                                    {player.name === playerName && <span style={{fontSize: 9, color: '#bbb'}}>(you)</span>}
                                     {player.isBot && <span style={{fontSize: 9, color: '#aaa'}}>🤖</span>}
                                     {player.id === currentPlayer?.id && ' 🎲'}
                                 </div>
@@ -707,127 +701,104 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                         </div>
                     ))}
                     <div className="div">Info</div>
-                    <div style={{
-                        padding: '10px 13px',
-                        background: '#fff',
-                        border: '1.5px solid var(--border)',
-                        borderRadius: 10
-                    }}>
+                    <div style={{padding: '10px 13px', background: '#fff', border: '1.5px solid var(--border)', borderRadius: 10}}>
                         {[
                             ['Turn', `#${gameState?.turn || 0}`],
                             ['Current', currentPlayer?.name || '—'],
                             ['Active', players.filter(p => !p.isBankrupt).length],
                         ].map(([label, value]) => (
-                            <div key={String(label)} style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                fontSize: 11,
-                                marginBottom: 5
-                            }}>
+                            <div key={String(label)} style={{display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 5}}>
                                 <span style={{color: '#aaa'}}>{label}</span>
                                 <strong style={{color: 'var(--gold)'}}>{value}</strong>
                             </div>
                         ))}
                     </div>
+                    <div className="div">Trade</div>
+                    <div className="slabel">Trade With</div>
+                    {players.filter(p => p.name !== playerName && !p.isBankrupt).map(player => {
+                        const idx = players.indexOf(player);
+                        return (
+                            <button key={player.id} className="btn btn-ghost btn-sm btn-full"
+                                    style={{justifyContent: 'flex-start', gap: 7, marginBottom: 5}}
+                                    onClick={() => setTradingWith(player)}>
+                                <div style={{width: 17, height: 17, borderRadius: '50%', background: COLORS[idx % COLORS.length], color: '#fff', fontSize: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700}}>
+                                    {player.name[0]}
+                                </div>
+                                {player.name}
+                            </button>
+                        );
+                    })}
+                    <div className="div"/>
+                    <button className="btn btn-ghost btn-sm btn-full" onClick={onLeave}>← Leave Game</button>
                 </div>
 
-                {/* CENTER: Board + controls */}
+                {/* CENTER: Board with inline action panel */}
                 <div className="gmain">
                     <Board
                         board={boardSpaces}
                         players={players.filter(p => !p.isBankrupt)}
                         animatedPositions={animatedPositions}
+                        dice={dice}
+                        rolling={rolling}
+                        actionPanel={
+                            <div className="board-actions">
+                                {isMyTurn && !paused && gameState?.status === 'InProgress' && (
+                                    <>
+                                        {me?.isInJail && (
+                                            <button className="btn btn-red btn-board btn-full"
+                                                    onClick={() => setJailModalOpen(true)}>
+                                                ⛓ Handle Jail
+                                            </button>
+                                        )}
+                                        <div className="action-row">
+                                            <button className="btn btn-gold btn-board" onClick={handleRoll}
+                                                    disabled={me?.hasRolledDice || rolling || me?.isInJail}>
+                                                {rolling ? '…' : '🎲 Roll'}
+                                            </button>
+                                            <button className="btn btn-green btn-board" onClick={() => setBuyModalOpen(true)}
+                                                    disabled={!canBuy}>
+                                                🏠 {canBuy ? `$${boardSpace?.purchasePrice || '?'}` : 'Buy'}
+                                            </button>
+                                            <button className="btn btn-ghost btn-board"
+                                                    onClick={() => hubCall('EndTurn', gameId)}
+                                                    disabled={!me?.hasRolledDice}>
+                                                ⏭ End
+                                            </button>
+                                        </div>
+                                        {currentSpace && (
+                                            <div style={{fontSize: 'clamp(7px, 1.1cqw, 10px)', color: '#666', textAlign: 'center', lineHeight: 1.3}}>
+                                                📍 <strong>{currentSpace.name.replace('\n', ' ')}</strong>
+                                                {canBuy && <span style={{color: 'var(--green)'}}> · available</span>}
+                                                {isOwned && !isMine && <span style={{color: 'var(--red)'}}> · pay rent</span>}
+                                                {isMine && <span style={{color: '#aaa'}}> · yours</span>}
+                                            </div>
+                                        )}
+                                        <button className="btn btn-board btn-ghost"
+                                                style={{color: 'var(--red)'}}
+                                                onClick={() => { if (confirm('Resign from game?')) { hubCall('ResignPlayer', gameId); } }}>
+                                            🏳 Resign
+                                        </button>
+                                        <TurnTimer startedAt={gameState?.currentTurnStartedAt}/>
+                                    </>
+                                )}
+                                {!isMyTurn && gameState?.status === 'InProgress' && (
+                                    <div style={{fontSize: 'clamp(7px, 1.1cqw, 11px)', color: '#aaa', textAlign: 'center', display: 'flex', alignItems: 'center', gap: 5}}>
+                                        <div className="spin" style={{width: 10, height: 10, flexShrink: 0}}/>
+                                        <span>Waiting for <strong>{currentPlayer?.name}</strong>…</span>
+                                    </div>
+                                )}
+                            </div>
+                        }
                     />
-
-                    <DiceTray dice={dice} rolling={rolling}/>
-
-                    {isMyTurn && !paused && gameState?.status === 'InProgress' && (
-                        <div className="card">
-                            <div style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                marginBottom: 9
-                            }}>
-                                <span className="slabel" style={{marginBottom: 0}}>Your Turn</span>
-                                <TurnTimer startedAt={gameState?.currentTurnStartedAt}/>
-                            </div>
-                            {me?.isInJail && (
-                                <button className="btn btn-red btn-full" style={{marginBottom: 9}}
-                                        onClick={() => setJailModalOpen(true)}>
-                                    ⛓ Handle Jail Situation
-                                </button>
-                            )}
-                            <div className="action-grid">
-                                <button className="btn btn-gold btn-lg" onClick={handleRoll}
-                                        disabled={me?.hasRolledDice || rolling || me?.isInJail}>
-                                    {rolling ? '…' : '🎲 Roll Dice'}
-                                </button>
-                                <button className="btn btn-green" onClick={() => setBuyModalOpen(true)}
-                                        disabled={!canBuy}>
-                                    🏠 Buy {canBuy ? `($${boardSpace?.purchasePrice || '?'})` : 'Property'}
-                                </button>
-                                <button className="btn btn-ghost" onClick={() => hubCall('EndTurn', gameId)}
-                                        disabled={!me?.hasRolledDice}>
-                                    ⏭ End Turn
-                                </button>
-                            </div>
-                            {currentSpace && (
-                                <div style={{
-                                    marginTop: 11,
-                                    padding: '8px 11px',
-                                    background: 'var(--cream)',
-                                    borderRadius: 8,
-                                    fontSize: 12
-                                }}>
-                                    📍 <strong>{currentSpace.name.replace('\n', ' ')}</strong>
-                                    {canBuy && <span style={{color: 'var(--green)', marginLeft: 5}}>← available!</span>}
-                                    {isOwned && !isMine &&
-                                        <span style={{color: 'var(--red)', marginLeft: 5}}>← pay rent!</span>}
-                                    {isMine && <span style={{color: '#aaa', marginLeft: 5}}>← yours</span>}
-                                </div>
-                            )}
-                            <button
-                                className="btn btn-sm btn-ghost"
-                                style={{marginTop: 9, color: 'var(--red)', width: 'auto'}}
-                                onClick={() => {
-                                    if (confirm('Resign from game?')) {
-                                        hubCall('ResignPlayer', gameId);
-                                    }
-                                }}
-                            >
-                                🏳 Resign
-                            </button>
-                        </div>
-                    )}
-
-                    {!isMyTurn && gameState?.status === 'InProgress' && (
-                        <div style={{
-                            textAlign: 'center', padding: 16, background: '#fff',
-                            border: '1.5px solid var(--border)', borderRadius: 12
-                        }}>
-                            <div className="spin" style={{margin: '0 auto 9px'}}/>
-                            <div style={{fontSize: 13, color: '#aaa', marginBottom: 12}}>
-                                Waiting for <strong>{currentPlayer?.name}</strong>…
-                            </div>
-                        </div>
-                    )}
-
-                    <div>
-                        <div className="slabel">Event Log</div>
-                        <div className="elog">
-                            {[...eventLog].reverse().map((entry, i) => (
-                                <div key={i} className="eitem">{entry}</div>
-                            ))}
-                            {eventLog.length === 0 && (
-                                <div className="eitem" style={{color: '#ccc'}}>No events yet.</div>
-                            )}
-                        </div>
-                    </div>
                 </div>
 
-                {/* RIGHT: Properties + Trade */}
+                {/* PROPERTIES: sits between board and event log */}
                 <div className="gsr">
+                    {/* Log toggle tab on right edge */}
+                    <button className="log-toggle" title={showLog ? 'Hide Event Log' : 'Show Event Log'}
+                            onClick={() => setShowLog(v => !v)}>
+                        {showLog ? '›' : '‹'}
+                    </button>
                     <div className="slabel">Your Properties ({myProperties.length})</div>
                     {myProperties.length === 0 && (
                         <div style={{fontSize: 11, color: '#ccc'}}>No properties yet.</div>
@@ -835,23 +806,9 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                     {myPropertyGroups.map(({color, items}) => (
                         <div key={color}>
                             {color !== '__other' && (
-                                <div style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 5,
-                                    marginTop: 6,
-                                    marginBottom: 3
-                                }}>
-                                    <div style={{
-                                        width: 8, height: 8, borderRadius: 2,
-                                        background: BCOLORS[color] || '#ccc', flexShrink: 0
-                                    }}/>
-                                    <span style={{
-                                        fontSize: 10,
-                                        fontWeight: 700,
-                                        color: '#888',
-                                        textTransform: 'capitalize'
-                                    }}>{color}</span>
+                                <div style={{display: 'flex', alignItems: 'center', gap: 5, marginTop: 6, marginBottom: 3}}>
+                                    <div style={{width: 8, height: 8, borderRadius: 2, background: BCOLORS[color] || '#ccc', flexShrink: 0}}/>
+                                    <span style={{fontSize: 10, fontWeight: 700, color: '#888', textTransform: 'capitalize'}}>{color}</span>
                                 </div>
                             )}
                             {items.map(prop => {
@@ -861,20 +818,13 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                     <div key={prop.id} className="prop-row">
                                         <div style={{display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5}}>
                                             {space?.color && (
-                                                <div className="prop-dot"
-                                                     style={{background: BCOLORS[space.color] || '#ccc'}}/>
+                                                <div className="prop-dot" style={{background: BCOLORS[space.color] || '#ccc'}}/>
                                             )}
                                             <span style={{fontSize: 11, fontWeight: 600, flex: 1}}>{prop.name}</span>
-                                            {prop.isMortgaged &&
-                                                <span className="badge bg-red" style={{fontSize: 9}}>Mort.</span>}
+                                            {prop.isMortgaged && <span className="badge bg-red" style={{fontSize: 9}}>Mort.</span>}
                                         </div>
                                         <div style={{fontSize: 10, color: '#aaa', marginBottom: 6}}>
-                                            {prop.hasHotel
-                                                ? '🏨 Hotel'
-                                                : prop.houseCount > 0
-                                                    ? `🏠 ${prop.houseCount} house${prop.houseCount !== 1 ? 's' : ''}`
-                                                    : 'No buildings'
-                                            }
+                                            {prop.hasHotel ? '🏨 Hotel' : prop.houseCount > 0 ? `🏠 ${prop.houseCount} house${prop.houseCount !== 1 ? 's' : ''}` : 'No buildings'}
                                         </div>
                                         {isMyTurn && !paused && (
                                             <div style={{display: 'flex', gap: 5, flexWrap: 'wrap'}}>
@@ -890,14 +840,9 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                                         +🏨{houseCost ? ` $${houseCost}` : ''}
                                                     </button>
                                                 )}
-                                                <button
-                                                    className="btn btn-sm btn-ghost"
-                                                    style={{
-                                                        fontSize: 10,
-                                                        color: prop.isMortgaged ? 'var(--green)' : 'var(--red)'
-                                                    }}
-                                                    onClick={() => setMortgagePending({prop, space})}
-                                                >
+                                                <button className="btn btn-sm btn-ghost"
+                                                        style={{fontSize: 10, color: prop.isMortgaged ? 'var(--green)' : 'var(--red)'}}
+                                                        onClick={() => setMortgagePending({prop, space})}>
                                                     {prop.isMortgaged ? 'Unmortgage' : 'Mortgage'}
                                                 </button>
                                             </div>
@@ -907,44 +852,28 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                             })}
                         </div>
                     ))}
-
                     {myProperties.some(p => p.houseCount > 0 || p.hasHotel) && (
-                        <button
-                            className="btn btn-ghost btn-sm btn-full"
-                            style={{color: 'var(--gold)', marginBottom: 6}}
-                            onClick={() => setLiquidateOpen(true)}
-                        >
+                        <button className="btn btn-ghost btn-sm btn-full" style={{color: 'var(--gold)', marginBottom: 6}}
+                                onClick={() => setLiquidateOpen(true)}>
                             💰 Liquidate Buildings
                         </button>
                     )}
-
-                    <div className="div">Trade</div>
-                    <div className="slabel">Trade With</div>
-                    {players.filter(p => p.name !== playerName && !p.isBankrupt).map(player => {
-                        const idx = players.indexOf(player);
-                        return (
-                            <button
-                                key={player.id}
-                                className="btn btn-ghost btn-sm btn-full"
-                                style={{justifyContent: 'flex-start', gap: 7, marginBottom: 5}}
-                                onClick={() => setTradingWith(player)}
-                            >
-                                <div style={{
-                                    width: 17, height: 17, borderRadius: '50%',
-                                    background: COLORS[idx % COLORS.length],
-                                    color: '#fff', fontSize: 8,
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700
-                                }}>
-                                    {player.name[0]}
-                                </div>
-                                {player.name}
-                            </button>
-                        );
-                    })}
-
-                    <div className="div"/>
-                    <button className="btn btn-ghost btn-sm btn-full" onClick={onLeave}>← Leave Game</button>
                 </div>
+
+                {/* EVENT LOG: right edge, shown when toggled */}
+                {showLog && (
+                    <div className="glog">
+                        <div className="slabel" style={{marginBottom: 4}}>Event Log</div>
+                        <div className="elog" style={{flex: 1, maxHeight: 'none', overflow: 'visible'}}>
+                            {[...eventLog].reverse().map((entry, i) => (
+                                <div key={i} className="eitem">{entry}</div>
+                            ))}
+                            {eventLog.length === 0 && (
+                                <div className="eitem" style={{color: '#ccc'}}>No events yet.</div>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {liquidateOpen && (
