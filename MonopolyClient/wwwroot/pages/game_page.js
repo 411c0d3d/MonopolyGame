@@ -603,13 +603,15 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
     const canBuy = ['Street', 'Railroad', 'Utility'].includes(currentSpace?.type) && !isOwned;
     const winner = gameState?.status === 'Finished' ? players.find(p => !p.isBankrupt) : null;
 
+    /** Component logic for SignalR game event listeners. */
+    /** Attaches SignalR listeners for real-time game updates. */
     useEffect(() => {
         const unsubscribers = [
             gameHub.on('TradeProposed', offer => setIncomingTrade(offer)),
             gameHub.on('GamePaused', () => setPaused(true)),
             gameHub.on('GameResumed', () => setPaused(false)),
             gameHub.on('CardDrawn', card => setDrawnCard(card)),
-            gameHub.on('DiceRolled', (d1, d2) => settleDice(d1, d2)),
+            gameHub.on('DiceRolled', (d1, d2) => settleDice([d1, d2])),
             gameHub.on('GameForceEnded', () => {
                 toast('Game ended by admin', 'error');
                 onLeave();

@@ -1,4 +1,5 @@
-﻿using MonopolyServer.Game.Models.Enums;
+﻿using System.Text.Json.Serialization;
+using MonopolyServer.Game.Models.Enums;
 
 namespace MonopolyServer.Game.Models;
 
@@ -65,6 +66,7 @@ public class Card
     /// <summary>
     /// Initialize a new Card instance with required identity and deck information.
     /// </summary>
+    [JsonConstructor]
     public Card(string id, string title, string description, CardType type, CardDeck deck)
     {
         Id = id;

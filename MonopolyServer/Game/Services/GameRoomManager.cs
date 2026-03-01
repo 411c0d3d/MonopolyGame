@@ -19,31 +19,26 @@ public class GameRoomManager
     private readonly Dictionary<string, GameEngine> _engines;
     private readonly ILogger<GameRoomManager> _logger;
     private readonly string _gamesDirectory;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
 
-    private static readonly JsonSerializerOptions _jsonOptions = BuildJsonOptions();
+    private static readonly JsonSerializerOptions JsonOptions = BuildJsonOptions();
 
     /// <summary>
     /// Constructor with dependency injection of logger. Initializes in-memory game store and loads existing games from disk.
     /// </summary>
-    /// <param name="logger">
-    /// ILogger for logging game room lifecycle events and errors. Injected via DI container.
-    /// </param>
     public GameRoomManager(ILogger<GameRoomManager> logger)
     {
         _logger = logger;
         _games = new Dictionary<string, GameState>();
         _engines = new Dictionary<string, GameEngine>();
-        _gamesDirectory = Path.Combine(AppContext.BaseDirectory, 
-            GameConstants.DataDirectoryName, 
+        _gamesDirectory = Path.Combine(AppContext.BaseDirectory,
+            GameConstants.DataDirectoryName,
             GameConstants.GamesDirectoryName);
 
         InitializePersistence();
     }
 
-    /// <summary>
-    /// Initialize persistence - create directory and load existing games from disk.
-    /// </summary>
+    /// <summary> Initialize persistence - create directory and load existing games from disk. </summary>
     private void InitializePersistence()
     {
         try
@@ -51,7 +46,7 @@ public class GameRoomManager
             if (!Directory.Exists(_gamesDirectory))
             {
                 Directory.CreateDirectory(_gamesDirectory);
-                _logger.LogInformation($"Created games directory: {_gamesDirectory}");
+                _logger.LogInformation("Created games directory: {Directory}", _gamesDirectory);
             }
 
             LoadGamesFromDisk();
@@ -67,41 +62,70 @@ public class GameRoomManager
     /// </summary>
     private void LoadGamesFromDisk()
     {
-        try
+        lock (_lock)
         {
-            var gameFiles = Directory.GetFiles(_gamesDirectory, $"*{GameConstants.GameFileExtension}");
+            try
+            {
+                var gameFiles = Directory.GetFiles(_gamesDirectory, $"*{GameConstants.GameFileExtension}");
 
-            foreach (var filePath in gameFiles)
+                foreach (var filePath in gameFiles)
+                {
+                    try
+                    {
+                        var json = File.ReadAllText(filePath);
+                        var game = JsonSerializer.Deserialize<GameState>(json, JsonOptions);
+
+                        if (game == null) continue;
+
+                        _games[game.GameId] = game;
+                        if (game.Status == GameStatus.InProgress)
+                        {
+                            _engines[game.GameId] = new GameEngine(game);
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        _logger.LogWarning("Deleting corrupt game file: {FileName}", Path.GetFileName(filePath));
+                        File.Delete(filePath);
+                    }
+                }
+
+                _logger.LogInformation("Loaded {Count} games from disk", _games.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading games from disk");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Direct access to purge files from disk before or during service runtime.
+    /// </summary>
+    public void VacuumStorage(Func<GameState, bool> predicate)
+    {
+        lock (_lock)
+        {
+            var files = Directory.GetFiles(_gamesDirectory, $"*{GameConstants.GameFileExtension}");
+            foreach (var path in files)
             {
                 try
                 {
-                    var json = File.ReadAllText(filePath);
-                    var game = JsonSerializer.Deserialize<GameState>(json, _jsonOptions);
-
-                    if (game != null)
+                    var json = File.ReadAllText(path);
+                    var game = JsonSerializer.Deserialize<GameState>(json, JsonOptions);
+                    if (game != null && predicate(game))
                     {
-                        _games[game.GameId] = game;
-
-                        if (game.Status == GameStatus.InProgress)
-                        {
-                            var engine = new GameEngine(game);
-                            _engines[game.GameId] = engine;
-                        }
-
-                        _logger.LogInformation($"Loaded game from disk: {game.GameId}");
+                        File.Delete(path);
+                        _games.Remove(game.GameId);
+                        _engines.Remove(game.GameId);
+                        _logger.LogInformation("Vacuumed game: {GameId}", game.GameId);
                     }
                 }
-                catch (Exception ex)
+                catch
                 {
-                    _logger.LogError(ex, $"Error loading game file: {filePath}");
+                    File.Delete(path); // Clear corrupt files
                 }
             }
-
-            _logger.LogInformation($"Loaded {_games.Count} games from disk");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error loading games from disk");
         }
     }
 
@@ -116,18 +140,18 @@ public class GameRoomManager
             if (!_games.TryGetValue(gameId, out var game))
                 return;
 
-            json = JsonSerializer.Serialize(game, _jsonOptions);
+            json = JsonSerializer.Serialize(game, JsonOptions);
         }
 
         try
         {
             var filePath = Path.Combine(_gamesDirectory, $"{gameId}{GameConstants.GameFileExtension}");
             await File.WriteAllTextAsync(filePath, json);
-            _logger.LogDebug($"Saved game to disk: {gameId}");
+            _logger.LogDebug("Saved game to disk: {GameId}", gameId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, $"Error saving game {gameId} to disk");
+            _logger.LogError(ex, "Error saving game {GameId} to disk", gameId);
         }
     }
 
@@ -142,12 +166,12 @@ public class GameRoomManager
             if (File.Exists(filePath))
             {
                 File.Delete(filePath);
-                _logger.LogInformation($"Deleted game file: {gameId}");
+                _logger.LogInformation("Deleted game file: {GameId}", gameId);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, $"Error deleting game file {gameId}");
+            _logger.LogError(ex, "Error deleting game file {GameId}", gameId);
         }
     }
 
@@ -164,7 +188,7 @@ public class GameRoomManager
 
             _ = SaveGameAsync(gameId);
 
-            _logger.LogInformation($"Game created: {gameId}");
+            _logger.LogInformation("Game created: {GameId}", gameId);
             return gameId;
         }
     }
@@ -212,7 +236,7 @@ public class GameRoomManager
         lock (_lock)
         {
             _engines[gameId] = engine;
-            _logger.LogInformation($"Engine set for game: {gameId}");
+            _logger.LogInformation("Engine set for game: {GameId}", gameId);
         }
     }
 
@@ -243,8 +267,9 @@ public class GameRoomManager
                 {
                     player.IsConnected = false;
                     player.DisconnectedAt = DateTime.UtcNow;
-                    player.ConnectionId = null; // Clear old connection ID
-                    _logger.LogInformation($"Player {player.Name} marked as disconnected in game {game.GameId}");
+                    player.ConnectionId = null;
+                    _logger.LogInformation("Player {PlayerName} marked as disconnected in game {GameId}", player.Name,
+                        game.GameId);
                 }
             }
         }
@@ -267,8 +292,8 @@ public class GameRoomManager
             player.ConnectionId = newConnectionId;
             player.IsConnected = true;
             player.DisconnectedAt = null;
-            
-            _logger.LogInformation($"Player {player.Name} reconnected to game {gameId}");
+
+            _logger.LogInformation("Player {PlayerName} reconnected to game {GameId}", player.Name, gameId);
             return true;
         }
     }
@@ -283,7 +308,7 @@ public class GameRoomManager
             _games.Remove(gameId);
             _engines.Remove(gameId);
             DeleteGameFile(gameId);
-            _logger.LogInformation($"Game deleted: {gameId}");
+            _logger.LogInformation("Game deleted: {GameId}", gameId);
         }
     }
 
@@ -302,7 +327,6 @@ public class GameRoomManager
                 gamesFinished: _games.Values.Count(g => g.Status == GameStatus.Finished),
                 totalPlayers: _games.Values.Sum(g => g.Players.Count)
             );
-
         }
     }
 

@@ -20,8 +20,6 @@ public class GameCleanupService : BackgroundService
     /// <summary>
     /// Constructor with dependency injection of IServiceProvider for accessing scoped services like GameRoomManager and ILogger for logging cleanup actions.
     /// </summary>
-    /// <param name="serviceProvider"></param>
-    /// <param name="logger"></param>
     public GameCleanupService(
         IServiceProvider serviceProvider,
         ILogger<GameCleanupService> logger)
@@ -34,12 +32,18 @@ public class GameCleanupService : BackgroundService
     {
         _logger.LogInformation("Game cleanup service started");
 
+        RunStartupCleanup();
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 await Task.Delay(TimeSpan.FromMinutes(GameConstants.CleanupIntervalMinutes), stoppingToken);
                 await PerformCleanup();
+            }
+            catch (OperationCanceledException)
+            {
+                break;
             }
             catch (Exception ex)
             {
@@ -48,6 +52,24 @@ public class GameCleanupService : BackgroundService
         }
 
         _logger.LogInformation("Game cleanup service stopped");
+    }
+
+    /// <summary>
+    /// Purges all finished games from disk and memory immediately on service start.
+    /// </summary>
+    private void RunStartupCleanup()
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var roomManager = scope.ServiceProvider.GetRequiredService<GameRoomManager>();
+            roomManager.VacuumStorage(g => g.Status == GameStatus.Finished);
+            _logger.LogInformation("Startup cleanup: all finished games purged");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during startup cleanup");
+        }
     }
 
     private async Task PerformCleanup()
@@ -68,7 +90,7 @@ public class GameCleanupService : BackgroundService
             {
                 roomManager.DeleteGame(game.GameId);
                 gamesCleanedUp++;
-                _logger.LogInformation($"Cleaned up abandoned game: {game.GameId}");
+                _logger.LogInformation("Cleaned up abandoned game: {GameId}", game.GameId);
                 continue;
             }
 
@@ -78,7 +100,7 @@ public class GameCleanupService : BackgroundService
             {
                 roomManager.DeleteGame(game.GameId);
                 gamesCleanedUp++;
-                _logger.LogInformation($"Cleaned up finished game: {game.GameId}");
+                _logger.LogInformation("Cleaned up finished game: {GameId}", game.GameId);
                 continue;
             }
 
@@ -109,14 +131,14 @@ public class GameCleanupService : BackgroundService
                     {
                         roomManager.DeleteGame(game.GameId);
                         gamesCleanedUp++;
-                        _logger.LogInformation($"Game {game.GameId} deleted after all players disconnected");
+                        _logger.LogInformation("Game {GameId} deleted after all players disconnected", game.GameId);
                         break;
                     }
 
                     if (game.HostId == player.Id && game.Players.Count > 0)
                     {
                         game.HostId = game.Players[0].Id;
-                        _logger.LogInformation($"New host assigned in game {game.GameId}");
+                        _logger.LogInformation("New host assigned in game {GameId}", game.GameId);
                     }
                 }
             }
@@ -143,7 +165,8 @@ public class GameCleanupService : BackgroundService
                     playersRemoved++;
                     stateChanged = true;
 
-                    _logger.LogInformation($"Player {player.Name} bankrupted in game {game.GameId} due to disconnect");
+                    _logger.LogInformation("Player {PlayerName} bankrupted in game {GameId} due to disconnect",
+                        player.Name, game.GameId);
 
                     if (wasCurrentPlayer)
                     {
@@ -151,7 +174,8 @@ public class GameCleanupService : BackgroundService
                         if (activePlayers.Count > 0)
                         {
                             engine.NextTurn();
-                            _logger.LogInformation($"Turn advanced in game {game.GameId} after current player disconnect");
+                            _logger.LogInformation("Turn advanced in game {GameId} after current player disconnect",
+                                game.GameId);
                         }
                     }
 
@@ -161,7 +185,7 @@ public class GameCleanupService : BackgroundService
                         if (activePlayer != null)
                         {
                             game.HostId = activePlayer.Id;
-                            _logger.LogInformation($"New host assigned in game {game.GameId}");
+                            _logger.LogInformation("New host assigned in game {GameId}", game.GameId);
                         }
                     }
                 }
@@ -177,7 +201,8 @@ public class GameCleanupService : BackgroundService
         if (gamesCleanedUp > 0 || playersRemoved > 0)
         {
             _logger.LogInformation(
-                $"Cleanup completed: {gamesCleanedUp} games removed, {playersRemoved} players affected");
+                "Cleanup completed: {GamesRemoved} games removed, {PlayersAffected} players affected",
+                gamesCleanedUp, playersRemoved);
         }
     }
 

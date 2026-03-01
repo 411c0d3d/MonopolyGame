@@ -23,16 +23,16 @@ const DIE_PIPS = {
 
 /** Card type display config: icon and accent colour. */
 const CARD_DISPLAY = {
-    Chance:       { icon: '❓', color: '#f59e0b', label: 'Chance'         },
-    CommunityChest:{ icon: '📦', color: '#3b82f6', label: 'Community Chest' },
-    Tax:          { icon: '💸', color: '#ef4444', label: 'Tax'            },
-    GoToJail:     { icon: '⛓',  color: '#6b7280', label: 'Go To Jail'    },
-    Go:           { icon: '🚀', color: '#10b981', label: 'GO'             },
-    FreeParking:  { icon: '🅿',  color: '#8b5cf6', label: 'Free Parking'  },
-    Jail:         { icon: '⛓',  color: '#6b7280', label: 'Just Visiting'  },
-    Railroad:     { icon: '🚂', color: '#374151', label: 'Railroad'       },
-    Utility:      { icon: '⚡', color: '#f59e0b', label: 'Utility'        },
-    default:      { icon: '📋', color: '#6b7280', label: 'Card'           },
+    Chance: {icon: '❓', color: '#f59e0b', label: 'Chance'},
+    CommunityChest: {icon: '📦', color: '#3b82f6', label: 'Community Chest'},
+    Tax: {icon: '💸', color: '#ef4444', label: 'Tax'},
+    GoToJail: {icon: '⛓', color: '#6b7280', label: 'Go To Jail'},
+    Go: {icon: '🚀', color: '#10b981', label: 'GO'},
+    FreeParking: {icon: '🅿', color: '#8b5cf6', label: 'Free Parking'},
+    Jail: {icon: '⛓', color: '#6b7280', label: 'Just Visiting'},
+    Railroad: {icon: '🚂', color: '#374151', label: 'Railroad'},
+    Utility: {icon: '⚡', color: '#f59e0b', label: 'Utility'},
+    default: {icon: '📋', color: '#6b7280', label: 'Card'},
 };
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
@@ -46,12 +46,14 @@ const CARD_DISPLAY = {
 function usePlayerHop(players) {
     const [animPositions, setAnimPositions] = useState(() => {
         const init = {};
-        players.forEach(p => { init[p.id] = p.position; });
+        players.forEach(p => {
+            init[p.id] = p.position;
+        });
         return init;
     });
 
     const prevPositions = useRef({});
-    const timersRef    = useRef({});   // pending timeouts per player
+    const timersRef = useRef({});   // pending timeouts per player
 
     useEffect(() => {
         players.forEach(player => {
@@ -65,7 +67,9 @@ function usePlayerHop(players) {
                 return;
             }
 
-            if (prev === curr) { return; }
+            if (prev === curr) {
+                return;
+            }
 
             // Clear any in-progress animation for this player
             (timersRef.current[player.id] || []).forEach(clearTimeout);
@@ -110,13 +114,15 @@ function usePlayerHop(players) {
  * @returns {[number[], boolean, Function, Function]}
  */
 function useDiceRoll() {
-    const [dice, setDice]       = useState([null, null]);
+    const [dice, setDice] = useState([null, null]);
     const [rolling, setRolling] = useState(false);
-    const intervalRef           = useRef(null);
-    const timeoutRef            = useRef(null);
-    const pendingRef            = useRef(null); // actual server dice queued during animation
+    const intervalRef = useRef(null);
+    const timeoutRef = useRef(null);
+    const pendingRef = useRef(null);  // actual server dice queued during animation
+    const rollingRef = useRef(false); // mirrors rolling state; avoids stale closure reads
 
     const triggerRoll = () => {
+        rollingRef.current = true;
         setRolling(true);
         pendingRef.current = null;
 
@@ -129,6 +135,7 @@ function useDiceRoll() {
 
         timeoutRef.current = setTimeout(() => {
             clearInterval(intervalRef.current);
+            rollingRef.current = false;
             setRolling(false);
             // Snap to real server values if they arrived while animating
             if (pendingRef.current) {
@@ -139,11 +146,11 @@ function useDiceRoll() {
     };
 
     /** Snaps dice to actual server values; queues if animation is still running. */
-    const settleDice = (d1, d2) => {
-        if (rolling) {
-            pendingRef.current = [d1, d2];
+    const settleDice = (values) => {
+        if (rollingRef.current) {
+            pendingRef.current = values;
         } else {
-            setDice([d1, d2]);
+            setDice(values);
         }
     };
 
@@ -164,12 +171,12 @@ function useDiceRoll() {
  * @param {{ value: number|null, rolling: boolean }} props
  */
 function Die({value, rolling}) {
+    const pips = (value && DIE_PIPS[value]) ? DIE_PIPS[value] : [];
     const grid = Array(9).fill(false);
-    if (value) {
-        DIE_PIPS[value].forEach(([row, col]) => {
-            grid[row * 3 + col] = true;
-        });
-    }
+    pips.forEach(([row, col]) => {
+        grid[row * 3 + col] = true;
+    });
+
     return (
         <div className={`die${rolling ? ' roll' : ''}`} aria-label={value ? `Die showing ${value}` : 'Die'}>
             {grid.map((active, i) => (
@@ -193,7 +200,8 @@ function DiceTray({dice, rolling}) {
             <Die value={d1} rolling={rolling}/>
             <Die value={d2} rolling={rolling}/>
             {hasResult && (
-                <div style={{fontSize: 13, color: '#aaa', marginLeft: 8, display: 'flex', alignItems: 'center', gap: 6}}>
+                <div
+                    style={{fontSize: 13, color: '#aaa', marginLeft: 8, display: 'flex', alignItems: 'center', gap: 6}}>
                     <span>= {d1 + d2}</span>
                     {isDoubles && (
                         <span className="doubles-badge">Doubles!</span>
@@ -210,17 +218,19 @@ function DiceTray({dice, rolling}) {
  */
 function ChestCardPopup({card, onDismiss}) {
     const progressRef = useRef(null);
-    const timerRef    = useRef(null);
-    const startRef    = useRef(null);
+    const timerRef = useRef(null);
+    const startRef = useRef(null);
 
     useEffect(() => {
-        if (!card) { return; }
+        if (!card) {
+            return;
+        }
 
         startRef.current = performance.now();
 
         // Animate progress bar via rAF so it's smooth regardless of re-renders
         const tick = (now) => {
-            const elapsed  = now - startRef.current;
+            const elapsed = now - startRef.current;
             const fraction = Math.min(elapsed / CARD_POPUP_MS, 1);
             if (progressRef.current) {
                 progressRef.current.style.transform = `scaleX(${1 - fraction})`;
@@ -235,7 +245,9 @@ function ChestCardPopup({card, onDismiss}) {
         return () => clearTimeout(timerRef.current);
     }, [card]);
 
-    if (!card) { return null; }
+    if (!card) {
+        return null;
+    }
 
     const display = CARD_DISPLAY[card.type] || CARD_DISPLAY.default;
 
