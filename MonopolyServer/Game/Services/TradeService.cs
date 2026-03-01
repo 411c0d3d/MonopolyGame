@@ -36,6 +36,9 @@ public class TradeService
             return null;
         }
 
+        tradeOffer.FromPlayerId = fromPlayerId;
+        tradeOffer.ToPlayerId = toPlayerId;
+
         var result = engine.ProposeTrade(tradeOffer);
         if (result != null)
         {

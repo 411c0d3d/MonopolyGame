@@ -22,15 +22,9 @@ public class GameHub : Hub
     private readonly InputValidator _validator;
     private readonly ILogger<GameHub> _logger;
 
-
     /// <summary>
     /// Constructor with dependency injection for game room management, trade services, input validation, and logging.
     /// </summary>
-    /// <param name="roomManager">Manages game rooms and handles retrieval, persistence, and lifecycle of GameState instances.</param>
-    /// <param name="tradeService">Handles creation, validation, and resolution of player-to-player trade offers.</param>
-    /// <param name="botOrchestrator">Schedules and executes bot turns when an AI player is next to act.</param>
-    /// <param name="validator">Validates and sanitizes incoming input (game IDs, player names, property/trade data).</param>
-    /// <param name="logger">Logs hub-level diagnostics, warnings, and error information.</param>
     public GameHub(
         GameRoomManager roomManager,
         TradeService tradeService,
@@ -445,6 +439,7 @@ public class GameHub : Hub
 
     /// <summary>
     /// Initiates a trade proposal between the caller and a target player.
+    /// Bot targets are responded to automatically via the bot orchestrator.
     /// </summary>
     public async Task ProposeTrade(string gameId, string toPlayerId, TradeOffer offer)
     {
@@ -485,13 +480,33 @@ public class GameHub : Hub
         }
 
         var result = _tradeService.ProposeTrade(gameId, caller.Id, toPlayerId, offer);
-        if (result != null)
+        if (result == null)
         {
-            var target = game.GetPlayerById(toPlayerId);
-            if (target?.ConnectionId != null)
-            {
-                await Clients.Client(target.ConnectionId).SendAsync("TradeProposed", SerializeTradeOffer(result, game));
-            }
+            _logger.LogDebug(
+                "[BOT-TRADE] ProposeTrade returned null — trade was rejected by TradeService — gameId={GameId} fromId={FromId} toId={ToId}",
+                gameId, caller.Id, toPlayerId);
+            await Clients.Caller.SendAsync("Error",
+                "Trade could not be created — check that you own the offered properties and have sufficient cash.");
+            return;
+        }
+
+        var target = game.GetPlayerById(toPlayerId);
+
+        _logger.LogDebug("[BOT-TRADE] Trade {TradeId} proposed — from='{FromName}' to='{ToName}' isBot={IsBot}",
+            result.Id, caller.Name, target?.Name, target?.IsBot);
+
+        // Persist before routing — bot reads from saved state, human gets a push notification
+        await PersistAndBroadcast(gameId, game);
+
+        if (target is { IsBot: true })
+        {
+            _logger.LogDebug("[BOT-TRADE] Routing to TryScheduleBotTradeResponse — botId={BotId}", toPlayerId);
+            _botOrchestrator.TryScheduleBotTradeResponse(gameId, toPlayerId);
+        }
+        else if (target?.ConnectionId != null)
+        {
+            await Clients.Client(target.ConnectionId)
+                .SendAsync("TradeProposed", SerializeTradeOffer(result, game));
         }
     }
 
@@ -573,77 +588,6 @@ public class GameHub : Hub
 
         await base.OnDisconnectedAsync(exception);
     }
-
-    /// <summary>
-    /// Persists game state and broadcasts to all players in the group.
-    /// </summary>
-    /// <summary>
-    /// Persists game state, broadcasts to all players in the group,
-    /// then schedules a bot turn if the next active player is a bot.
-    /// </summary>
-    private async Task PersistAndBroadcast(string gameId, GameState game)
-    {
-        await _roomManager.SaveGameAsync(gameId);
-        await Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
-        _botOrchestrator.TryScheduleIfBotTurn(gameId, game);
-    }
-
-    /// <summary>
-    /// Validates that the SignalR caller is the authorized player for the current turn.
-    /// </summary>
-    private (bool isValid, Player? player, string? error) VerifyCurrentPlayer(GameState? game)
-    {
-        if (game == null)
-        {
-            return (false, null, "Game not found");
-        }
-
-        var caller = GetCallingPlayer(game);
-        if (caller == null)
-        {
-            return (false, null, "Unauthorized");
-        }
-
-        if (game.Status != GameStatus.InProgress)
-        {
-            return (false, caller, "Game not running");
-        }
-
-        if (game.GetCurrentPlayer()?.Id != caller.Id)
-        {
-            return (false, caller, "Not your turn");
-        }
-
-        return (true, caller, null);
-    }
-
-    /// <summary>
-    /// Maps a GameState to its broadcast DTO via the shared mapper.
-    /// </summary>
-    private static GameStateDto SerializeGameState(GameState game) => GameStateMapper.ToDto(game);
-
-    /// <summary>
-    /// Maps a trade offer to a DTO for broadcasting.
-    /// </summary>
-    private TradeOfferDto SerializeTradeOffer(TradeOffer t, GameState g) => new()
-    {
-        Id = t.Id,
-        FromPlayerId = t.FromPlayerId,
-        FromPlayerName = g.GetPlayerById(t.FromPlayerId)?.Name ?? "Unknown",
-        ToPlayerId = t.ToPlayerId,
-        ToPlayerName = g.GetPlayerById(t.ToPlayerId)?.Name ?? "Unknown",
-        OfferedCash = t.OfferedCash,
-        RequestedCash = t.RequestedCash,
-        OfferedPropertyIds = t.OfferedPropertyIds,
-        RequestedPropertyIds = t.RequestedPropertyIds,
-        Status = t.Status.ToString()
-    };
-
-    /// <summary>
-    /// Resolves the calling player by their SignalR connection ID.
-    /// </summary>
-    private Player? GetCallingPlayer(GameState? game) =>
-        game?.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
 
     /// <summary>
     /// Resigns the calling player from the game, triggering bankruptcy and asset transfer to the bank.
@@ -815,4 +759,76 @@ public class GameHub : Hub
         _logger.LogInformation("Host added {Count} bot(s) to game {GameId}", toAdd, gameId);
         await PersistAndBroadcast(gameId, game);
     }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Persists game state, broadcasts to all players in the group,
+    /// then schedules a bot turn if the next active player is a bot.
+    /// </summary>
+    private async Task PersistAndBroadcast(string gameId, GameState game)
+    {
+        await _roomManager.SaveGameAsync(gameId);
+        await Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
+        _botOrchestrator.TryScheduleIfBotTurn(gameId, game);
+    }
+
+    /// <summary>
+    /// Validates that the SignalR caller is the authorized player for the current turn.
+    /// </summary>
+    private (bool isValid, Player? player, string? error) VerifyCurrentPlayer(GameState? game)
+    {
+        if (game == null)
+        {
+            return (false, null, "Game not found");
+        }
+
+        var caller = GetCallingPlayer(game);
+        if (caller == null)
+        {
+            return (false, null, "Unauthorized");
+        }
+
+        if (game.Status != GameStatus.InProgress)
+        {
+            return (false, caller, "Game not running");
+        }
+
+        if (game.GetCurrentPlayer()?.Id != caller.Id)
+        {
+            return (false, caller, "Not your turn");
+        }
+
+        return (true, caller, null);
+    }
+
+    /// <summary>
+    /// Maps a GameState to its broadcast DTO via the shared mapper.
+    /// </summary>
+    private static GameStateDto SerializeGameState(GameState game) => GameStateMapper.ToDto(game);
+
+    /// <summary>
+    /// Maps a trade offer to a DTO for broadcasting.
+    /// </summary>
+    private TradeOfferDto SerializeTradeOffer(TradeOffer t, GameState g) => new()
+    {
+        Id = t.Id,
+        FromPlayerId = t.FromPlayerId,
+        FromPlayerName = g.GetPlayerById(t.FromPlayerId)?.Name ?? "Unknown",
+        ToPlayerId = t.ToPlayerId,
+        ToPlayerName = g.GetPlayerById(t.ToPlayerId)?.Name ?? "Unknown",
+        OfferedCash = t.OfferedCash,
+        RequestedCash = t.RequestedCash,
+        OfferedPropertyIds = t.OfferedPropertyIds,
+        RequestedPropertyIds = t.RequestedPropertyIds,
+        Status = t.Status.ToString()
+    };
+
+    /// <summary>
+    /// Resolves the calling player by their SignalR connection ID.
+    /// </summary>
+    private Player? GetCallingPlayer(GameState? game) =>
+        game?.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
 }

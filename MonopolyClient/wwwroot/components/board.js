@@ -79,18 +79,47 @@ function Board({board, players}) {
         return '';
     };
 
+    /** Returns a price string for any purchasable or taxable space. */
+    const getCellPrice = (space, boardSpace) => {
+        const price = boardSpace?.purchasePrice || space.price || space.amount || space.tax;
+        if (!price) {
+            return null;
+        }
+        return `$${price}`;
+    };
+
     /** Renders an individual space cell on the board. */
     const Cell = ({space, layout, style = {}}) => {
         const boardSpace = board?.find(b => b.id === space.id);
         const isStreet = space.type === 'Street';
+        const isPurchasable = ['Street', 'Railroad', 'Utility'].includes(space.type);
+        const isTax = space.type === 'Tax';
+        const showPrice = isPurchasable || isTax;
         const isVert = style.flexDirection === 'row' || style.flexDirection === 'row-reverse';
         const icon = getIcon(space);
-        const hasPrice = ['Street', 'Railroad', 'Utility'].includes(space.type);
+        const priceLabel = getCellPrice(space, boardSpace);
+
+        // Houses/hotels displayed on the color bar
+        const buildingOverlay = (() => {
+            if (!boardSpace) {
+                return null;
+            }
+            if (boardSpace.hasHotel) {
+                return <span style={{fontSize: 7, lineHeight: 1, userSelect: 'none'}}>🏨</span>;
+            }
+            if (boardSpace.houseCount > 0) {
+                return (
+                    <span style={{fontSize: 6, lineHeight: 1, letterSpacing: '-1px', userSelect: 'none'}}>
+                        {'🏠'.repeat(boardSpace.houseCount)}
+                    </span>
+                );
+            }
+            return null;
+        })();
 
         let bnameContent;
 
         if (isStreet) {
-            // Streets: name + optional price, no icon
             if (layout === 'left') {
                 bnameContent = (
                     <div style={{
@@ -105,14 +134,14 @@ function Board({board, players}) {
                         <div style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)', textAlign: 'center'}}>
                             {space.name}
                         </div>
-                        {hasPrice && (
+                        {priceLabel && (
                             <div style={{
                                 writingMode: 'vertical-rl',
                                 transform: 'rotate(180deg)',
                                 fontWeight: 800,
                                 fontSize: 'clamp(5px, 0.6vw, 8px)'
                             }}>
-                                ${boardSpace?.purchasePrice || space.price || '0'}
+                                {priceLabel}
                             </div>
                         )}
                     </div>
@@ -128,13 +157,13 @@ function Board({board, players}) {
                         alignItems: 'center',
                         padding: '2px'
                     }}>
-                        {hasPrice && (
+                        {priceLabel && (
                             <div style={{
                                 writingMode: 'vertical-rl',
                                 fontWeight: 800,
                                 fontSize: 'clamp(5px, 0.6vw, 8px)'
                             }}>
-                                ${boardSpace?.purchasePrice || space.price || '0'}
+                                {priceLabel}
                             </div>
                         )}
                         <div style={{writingMode: 'vertical-rl', textAlign: 'center'}}>
@@ -159,15 +188,12 @@ function Board({board, players}) {
                             wordBreak: 'break-word',
                             overflowWrap: 'break-word'
                         }}>{space.name}</div>
-                        {hasPrice && (
-                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>
-                                ${boardSpace?.purchasePrice || space.price || '0'}
-                            </div>
+                        {priceLabel && (
+                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>{priceLabel}</div>
                         )}
                     </div>
                 );
             } else {
-                // top — matches bottom layout: name at top, price at bottom, space-between
                 bnameContent = (
                     <div style={{
                         display: 'flex',
@@ -184,18 +210,15 @@ function Board({board, players}) {
                             wordBreak: 'break-word',
                             overflowWrap: 'break-word'
                         }}>{space.name}</div>
-                        {hasPrice && (
-                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>
-                                ${boardSpace?.purchasePrice || space.price || '0'}
-                            </div>
+                        {priceLabel && (
+                            <div style={{fontSize: 'clamp(5px, 0.6vw, 8px)', fontWeight: 800}}>{priceLabel}</div>
                         )}
                     </div>
                 );
             }
         } else {
-            // Non-street: medium icon centered, name strip near outer border
+            // Non-street: icon + name + optional price
             if (layout === 'left') {
-                // Outer border = LEFT edge of cell
                 bnameContent = (
                     <div style={{
                         display: 'flex',
@@ -207,13 +230,29 @@ function Board({board, players}) {
                         <div className="bname-strip" style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)'}}>
                             {space.name}
                         </div>
-                        <div className="bicon" style={{flex: 1, transform: 'rotate(-90deg)'}}>
-                            {icon}
+                        <div style={{
+                            flex: 1,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 2
+                        }}>
+                            <div className="bicon" style={{transform: 'rotate(-90deg)'}}>{icon}</div>
+                            {showPrice && priceLabel && (
+                                <div style={{
+                                    writingMode: 'vertical-rl',
+                                    transform: 'rotate(180deg)',
+                                    fontWeight: 800,
+                                    fontSize: 'clamp(4px, 0.55vw, 7px)'
+                                }}>
+                                    {priceLabel}
+                                </div>
+                            )}
                         </div>
                     </div>
                 );
             } else if (layout === 'right') {
-                // Outer border = RIGHT edge of cell
                 bnameContent = (
                     <div style={{
                         display: 'flex',
@@ -222,8 +261,24 @@ function Board({board, players}) {
                         height: '100%',
                         alignItems: 'center'
                     }}>
-                        <div className="bicon" style={{flex: 1, transform: 'rotate(90deg)'}}>
-                            {icon}
+                        <div style={{
+                            flex: 1,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 2
+                        }}>
+                            <div className="bicon" style={{transform: 'rotate(90deg)'}}>{icon}</div>
+                            {showPrice && priceLabel && (
+                                <div style={{
+                                    writingMode: 'vertical-rl',
+                                    fontWeight: 800,
+                                    fontSize: 'clamp(4px, 0.55vw, 7px)'
+                                }}>
+                                    {priceLabel}
+                                </div>
+                            )}
                         </div>
                         <div className="bname-strip" style={{writingMode: 'vertical-rl'}}>
                             {space.name}
@@ -231,7 +286,6 @@ function Board({board, players}) {
                     </div>
                 );
             } else if (layout === 'bottom') {
-                // Outer border = BOTTOM edge — name at bottom, icon above
                 bnameContent = (
                     <div style={{
                         display: 'flex',
@@ -251,10 +305,13 @@ function Board({board, players}) {
                         }}>
                             {space.name}
                         </div>
+                        {showPrice && priceLabel && (
+                            <div style={{fontSize: 'clamp(4px, 0.55vw, 6px)', fontWeight: 800}}>{priceLabel}</div>
+                        )}
                     </div>
                 );
             } else {
-                // top — name at top, icon below
+                // top
                 bnameContent = (
                     <div style={{
                         display: 'flex',
@@ -274,6 +331,9 @@ function Board({board, players}) {
                             {space.name}
                         </div>
                         <div className="bicon">{icon}</div>
+                        {showPrice && priceLabel && (
+                            <div style={{fontSize: 'clamp(4px, 0.55vw, 6px)', fontWeight: 800}}>{priceLabel}</div>
+                        )}
                     </div>
                 );
             }
@@ -290,8 +350,15 @@ function Board({board, players}) {
                         background: BCOLORS[space.color] || '#ccc',
                         width: isVert ? '12px' : '100%',
                         height: isVert ? '100%' : '12px',
-                        flexShrink: 0
-                    }}/>
+                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        overflow: 'visible',
+                        position: 'relative'
+                    }}>
+                        {buildingOverlay}
+                    </div>
                 )}
                 <div className="bname">
                     {bnameContent}
@@ -411,28 +478,28 @@ function Board({board, players}) {
                     {toks(30)}
                 </div>
 
-                {/* Bottom row: spaces 1–9 (right to left, GO toward Jail) */}
+                {/* Bottom row: spaces 1–9 */}
                 {SPACES.slice(1, 10).map((s, i) => (
                     <div key={s.id} style={{gridColumn: 10 - i, gridRow: 11, display: 'flex', flexDirection: 'column'}}>
                         <Cell space={s} layout="bottom" style={{height: '100%', flexDirection: 'column'}}/>
                     </div>
                 ))}
 
-                {/* Left column: spaces 11–19 (bottom to top, Jail toward Free Parking) */}
+                {/* Left column: spaces 11–19 */}
                 {SPACES.slice(11, 20).map((s, i) => (
                     <div key={s.id} style={{gridColumn: 1, gridRow: 10 - i, display: 'flex'}}>
                         <Cell space={s} layout="left" style={{height: '100%', width: '100%', flexDirection: 'row'}}/>
                     </div>
                 ))}
 
-                {/* Top row: spaces 21–29 (left to right, Free Parking toward Go To Jail) */}
+                {/* Top row: spaces 21–29 */}
                 {SPACES.slice(21, 30).map((s, i) => (
                     <div key={s.id} style={{gridColumn: 2 + i, gridRow: 1, display: 'flex', flexDirection: 'column'}}>
                         <Cell space={s} layout="top" style={{height: '100%', flexDirection: 'column'}}/>
                     </div>
                 ))}
 
-                {/* Right column: spaces 31–39 (top to bottom, Go To Jail toward GO) */}
+                {/* Right column: spaces 31–39 */}
                 {SPACES.slice(31, 40).map((s, i) => (
                     <div key={s.id} style={{gridColumn: 11, gridRow: 2 + i, display: 'flex'}}>
                         <Cell space={s} layout="right"

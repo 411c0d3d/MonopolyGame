@@ -71,6 +71,65 @@ public class BotTurnOrchestrator
         });
     }
 
+    /// <summary>
+    /// Schedules an immediate incoming-trade response for a bot that is not the current turn player.
+    /// Uses the same per-game semaphore as the turn loop to prevent race conditions.
+    /// </summary>
+    public void TryScheduleBotTradeResponse(string gameId, string botPlayerId)
+    {
+        _logger.LogDebug("[BOT-TRADE] TryScheduleBotTradeResponse called — game={GameId} botPlayerId={BotPlayerId}",
+            gameId, botPlayerId);
+
+        _ = Task.Run(async () =>
+        {
+            var gameLock = _gameLocks.GetOrAdd(gameId, _ => new SemaphoreSlim(1, 1));
+            if (!await gameLock.WaitAsync(TimeSpan.FromSeconds(LockTimeoutSeconds)))
+            {
+                _logger.LogWarning("[BOT-TRADE] Lock timed out for game {GameId}", gameId);
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(ShortDelayMs);
+
+                var game = _roomManager.GetGame(gameId);
+                if (game == null || game.Status != GameStatus.InProgress)
+                {
+                    _logger.LogDebug("[BOT-TRADE] Aborted — game not found or not in progress — game={GameId}", gameId);
+                    return;
+                }
+
+                var bot = game.GetPlayerById(botPlayerId);
+                if (bot == null || !bot.IsBot || bot.IsBankrupt)
+                {
+                    _logger.LogDebug(
+                        "[BOT-TRADE] Aborted — bot invalid — found={Found} isBot={IsBot} isBankrupt={IsBankrupt}",
+                        bot != null, bot?.IsBot, bot?.IsBankrupt);
+                    return;
+                }
+
+                var pending = game.PendingTrades
+                    .Where(t => t.ToPlayerId == bot.Id && t.Status == TradeStatus.Pending)
+                    .ToList();
+
+                _logger.LogDebug("[BOT-TRADE] Bot '{BotName}' has {Count} pending trade(s) to respond to", bot.Name,
+                    pending.Count);
+
+                HandleIncomingTrades(gameId, game, bot);
+                await BroadcastAsync(gameId, game);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[BOT-TRADE] Unhandled error in bot trade response for game {GameId}", gameId);
+            }
+            finally
+            {
+                gameLock.Release();
+            }
+        });
+    }
+
     // -------------------------------------------------------------------------
     // Core turn loop
     // -------------------------------------------------------------------------
@@ -117,9 +176,30 @@ public class BotTurnOrchestrator
 
     /// <summary>
     /// Executes turn steps allowing safe drop-outs if context invalidates.
+    /// Pending trade offers are resolved first, before any other action.
     /// </summary>
     private async Task RunBotTurnLogicAsync(string gameId, GameState game, GameEngine engine, Player bot)
     {
+        // --- Incoming trades: must be resolved before anything else ---
+        bool hadPendingTrades = game.PendingTrades
+            .Any(t => t.ToPlayerId == bot.Id && t.Status == TradeStatus.Pending);
+
+        _logger.LogDebug(
+            "[BOT-TRADE] Turn start check — bot='{BotName}' pendingTrades={HasPending} totalInList={Total}",
+            bot.Name, hadPendingTrades, game.PendingTrades.Count);
+
+        if (hadPendingTrades)
+        {
+            HandleIncomingTrades(gameId, game, bot);
+            await BroadcastAsync(gameId, game);
+            await Task.Delay(ActionDelayMs);
+
+            if (!TryGetBotContext(gameId, out game, out engine, out bot))
+            {
+                return;
+            }
+        }
+
         bool alreadyRolledInJail = false;
 
         // --- Jail handling ---
@@ -194,9 +274,8 @@ public class BotTurnOrchestrator
         HandleUnmortgaging(game, engine, bot);
         HandleBuilding(game, engine, bot);
 
-        // --- Trade processing ---
+        // --- Outgoing trade proposals ---
         await HandleOutgoingTradesAsync(gameId, game, bot);
-        HandleIncomingTrades(gameId, game, bot);
 
         // Broadcast final state before ending turn
         await BroadcastAsync(gameId, game);
@@ -392,7 +471,7 @@ public class BotTurnOrchestrator
     }
 
     /// <summary>
-    /// Evaluates and responds to incoming trade offers.
+    /// Evaluates and responds to all pending incoming trade offers for the given bot.
     /// </summary>
     private void HandleIncomingTrades(string gameId, GameState game, Player bot)
     {
@@ -400,9 +479,15 @@ public class BotTurnOrchestrator
             .Where(t => t.ToPlayerId == bot.Id && t.Status == TradeStatus.Pending)
             .ToList();
 
+        _logger.LogDebug("[BOT-TRADE] HandleIncomingTrades — bot='{BotName}' found={Count}", bot.Name, incoming.Count);
+
         foreach (var trade in incoming)
         {
-            if (_decisions.ShouldAcceptTrade(trade, bot, game))
+            bool accept = _decisions.ShouldAcceptTrade(trade, bot, game);
+            _logger.LogDebug("[BOT-TRADE] Evaluating trade {TradeId} — fromPlayer={FromId} decision={Decision}",
+                trade.Id, trade.FromPlayerId, accept ? "ACCEPT" : "REJECT");
+
+            if (accept)
             {
                 _tradeService.AcceptTrade(gameId, trade.Id, bot.Id);
             }
