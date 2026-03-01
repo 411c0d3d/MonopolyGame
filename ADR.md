@@ -2,9 +2,106 @@
 
 ## Overview
 
-Multiplayer Monopoly built on ASP.NET Core 10 with a SignalR hub and a React client served through Razor pages. Complete
-game engine covering all classic rules — card system, trading, jail, rent, and buildings. In-memory state only. No
-database, no auctions, no admin privilege creep.
+Multiplayer Monopoly built on ASP.NET Core 10 with a SignalR hub and a React client served through a static HTML shell.
+Complete game engine covering all classic rules — card system, trading, jail, rent, and buildings. Active game state is
+held in memory for performance and additionally persisted to JSON for recovery across restarts. No database, no auctions,
+no admin privilege creep.
+
+---
+
+## Project Structure
+
+### Server — `MonopolyServer/`
+
+```
+MonopolyServer/
+├── Bot/
+│   ├── BotDecisionEngine.cs         # Bot move evaluation and decision logic
+│   └── BotTurnOrchestrator.cs       # Orchestrates full bot turn execution
+├── DTOs/
+│   ├── GameRoomInfo.cs
+│   ├── GameStateDto.cs
+│   ├── PlayerDto.cs
+│   ├── PlayerLobbyInfo.cs
+│   ├── PropertyDto.cs
+│   ├── ServerHealthStatsDto.cs
+│   └── TradeOfferDto.cs
+├── Game/
+│   ├── Constants/
+│   │   └── GameConstants.cs         # Board layout, rent tables, card definitions
+│   ├── Engine/
+│   │   └── GameEngine.cs            # All game rules — stateless, validated, logged
+│   └── Models/
+│       ├── Enums/
+│       │   ├── CardDeck.cs
+│       │   ├── CardType.cs
+│       │   ├── GameStatus.cs
+│       │   ├── JailStrategy.cs
+│       │   ├── PropertyType.cs
+│       │   └── TradeStatus.cs
+│       ├── Board.cs
+│       ├── Card.cs
+│       ├── GameState.cs
+│       ├── Player.cs
+│       ├── Property.cs
+│       └── TradeOffer.cs
+├── Services/
+│   ├── CardDeckManager.cs           # Deck shuffle, draw, and return lifecycle
+│   ├── GameRoomManager.cs           # Thread-safe singleton, single source of truth
+│   ├── LobbyService.cs              # Lobby lifecycle — join, leave, host promotion
+│   ├── TradeService.cs              # Trade orchestration, decoupled from SignalR
+│   └── TurnTimerService.cs          # Per-game timer, auto-advance on idle
+├── Hubs/
+│   ├── AdminHub.cs                  # Admin diagnostics and server health
+│   └── GameHub.cs                   # SignalR hub — validate · delegate · broadcast only
+├── Infrastructure/
+│   ├── GameCleanupService.cs        # BackgroundService — purges stale rooms every 60 s
+│   ├── GameStateMapper.cs           # Maps GameState → GameStateDto
+│   ├── InputValidator.cs            # Shared input guard helpers
+│   └── RateLimitingFilter.cs        # Per-connection rate limiting
+├── Tests/
+├── appsettings.json
+├── appsettings.Development.json
+├── Dockerfile
+├── MonopolyServer.http
+└── Program.cs
+```
+
+### Client — `MonopolyClient/`
+
+```
+MonopolyClient/
+├── wwwroot/
+│   ├── animation/
+│   │   ├── animation.css            # Keyframe and transition definitions
+│   │   └── animation.js             # usePlayerHop, useDiceRoll, DiceTray, ChestCardPopup
+│   ├── components/
+│   │   ├── board.js                 # Board component — 40-cell grid, tokens, scaled sizing
+│   │   ├── header.js                # Top bar — room code, player list, connection status
+│   │   ├── toasts.js                # Transient notification system
+│   │   └── turn_timer.js            # Countdown display, auto-advance warning
+│   ├── css/
+│   │   ├── main.css                 # Core layout and game UI styles
+│   │   └── site.css                 # Global resets and typography
+│   ├── lib/                         # Vendored third-party scripts (SignalR, React)
+│   ├── pages/
+│   │   ├── admin_page.js            # Server health and diagnostics view
+│   │   ├── game_page.js             # GamePage — hub wiring, all game state
+│   │   ├── home_page.js             # Landing page — create or join a room
+│   │   └── lobby_page.js            # Pre-game lobby — player list, start button
+│   ├── utils/
+│   │   ├── constants.js             # SPACES, COLORS, BCOLORS
+│   │   └── hub_service.js           # SignalR connection factory and helpers
+│   ├── app.js                       # Root component and page router
+│   ├── favicon.ico
+│   ├── globals.js                   # React hook aliases on window
+│   ├── index.html                   # Shell page; loads React bundles via script tags
+│   └── jsconfig.json
+├── appsettings.json
+├── appsettings.Development.json
+├── Dockerfile
+└── Program.cs
+```
 
 ---
 
@@ -65,6 +162,19 @@ draw the next card immediately.
 
 **Card decks:** `CardDeckManager` shuffles at game start. Drawn from front, returned to back. Get Out of Jail Free cards
 are held by the player and returned to the deck bottom on use. Deck reshuffles if it empties mid-game.
+
+---
+
+## Data Layer
+
+Active game state is held in memory (`Dictionary<string, GameState>`) for low-latency reads and writes during play. State
+is additionally persisted to JSON via file I/O, allowing the server to recover in-progress games across restarts without
+a database dependency. Writes are scoped to meaningful transitions (game start, turn end, state change) rather than every
+mutation, keeping I/O overhead negligible.
+
+The persistence layer is isolated from the engine. `GameRoomManager` owns the write path; the engine has no knowledge of
+storage. Replacing file-backed JSON with a full database backend requires only a new `IGameStateStore` implementation
+without touching engine or hub code.
 
 ---
 
@@ -270,36 +380,44 @@ public override async Task OnDisconnectedAsync(Exception? ex)
 
 ---
 
-## React + Razor Client Architecture
+## React Client Architecture
 
 ### Serving Strategy
 
-A single Razor page (`_Host.cshtml`) is the entire server-rendered surface. It emits the HTML shell, injects the SignalR
-hub URL as a `window` constant, and loads the React bundles as plain `<script>` tags. After that first response, Razor
-is done — all subsequent UI is React.
+`index.html` is the entire static shell. It loads the React bundles as plain `<script>` tags and exposes the SignalR hub
+URL as a `window` constant. After the initial load, all UI is React — the server renders nothing further.
 
 ```
-/Pages/_Host.cshtml          ← Razor shell only; injects hub URL and script tags
-/wwwroot/js/
-    constants.js             ← SPACES, COLORS, BCOLORS — shared game data
+MonopolyClient/wwwroot/
     globals.js               ← React hook aliases (useState, useEffect, …) on window
-    animations.js            ← usePlayerHop, useDiceRoll, Die, DiceTray, ChestCardPopup
-    board.js                 ← Board component with scaled cells and token overlay
-    game_page.js             ← GamePage — hub wiring, all game state, action panel
-    lobby.js                 ← LobbyPage, RoomPage
     app.js                   ← Root component and page router
+    utils/
+        constants.js         ← SPACES, COLORS, BCOLORS — shared game data
+        hub_service.js       ← SignalR connection factory and helpers
+    animation/
+        animation.js         ← usePlayerHop, useDiceRoll, DiceTray, ChestCardPopup
+    components/
+        board.js             ← Board component with scaled cells and token overlay
+        header.js            ← Top bar — room code, player list, connection status
+        toasts.js            ← Transient notification system
+        turn_timer.js        ← Countdown display, auto-advance warning
+    pages/
+        home_page.js         ← Landing page — create or join a room
+        lobby_page.js        ← Pre-game lobby — player list, start button
+        game_page.js         ← GamePage — hub wiring, all game state, action panel
+        admin_page.js        ← Server health and diagnostics view
 ```
 
-No npm build pipeline, no module bundler. Components are authored in JSX compiled by a lightweight esbuild step at
-publish; in development Babel standalone handles it in-browser.
+No npm build pipeline, no module bundler. Scripts are loaded in dependency order via `<script>` tags; `globals.js`
+aliases React hooks onto `window` so every file can access them without import syntax.
 
 ### Component Tree
 
 ```
 App
 ├── Header
-├── LobbyPage               ← game list, create / join
-│   └── RoomPage            ← waiting room, player list, start button
+├── HomePage                ← game list, create / join
+├── LobbyPage               ← waiting room, player list, start button
 └── GamePage                ← full game UI; owns all hub subscriptions
     ├── Board               ← 40-cell grid, scaled tokens, inline dice + action panel
     │   ├── DiceTray        ← die faces, sum label, reserved doubles slot
@@ -317,7 +435,7 @@ and `call`, and reconnects automatically.
 ```js
 const gameHub = (() => {
     const conn = new signalR.HubConnectionBuilder()
-        .withUrl(window.HUB_URL)          // injected by Razor at render time
+        .withUrl(window.HUB_URL)
         .withAutomaticReconnect()
         .build();
 
@@ -342,7 +460,7 @@ const gameHub = (() => {
 reconnect, which the client handles by calling `JoinGame` again to rejoin the SignalR group and receive a fresh
 `GameStateUpdated`.
 
-### Subscribing to Hub Events
+### Event Subscription Pattern
 
 Components subscribe inside `useEffect` and return each unsubscribe function as cleanup. This guarantees handlers are
 torn down when the component unmounts and prevents duplicate listener accumulation across page transitions or StrictMode
@@ -351,17 +469,17 @@ double-invocations.
 ```js
 useEffect(() => {
     const unsubs = [
-        gameHub.on('GameStateUpdated', state       => setGameState(state)),
-        gameHub.on('DiceRolled',       (d1, d2)   => settleDice([d1, d2])),
-        gameHub.on('CardDrawn',        card        => setDrawnCard(card)),
-        gameHub.on('TradeProposed',    offer       => setIncomingTrade(offer)),
-        gameHub.on('GamePaused',       ()          => setPaused(true)),
-        gameHub.on('GameResumed',      ()          => setPaused(false)),
-        gameHub.on('TurnWarning',      ({message}) => toast(`⏰ ${message}`, 'warning')),
-        gameHub.on('PlayerKicked',     ({playerName}) => toast(`${playerName} was removed`)),
-        gameHub.on('GameForceEnded',   ()          => { toast('Game ended', 'error'); onLeave(); }),
-        gameHub.on('Kicked',           msg         => { toast(msg, 'error'); onLeave(); }),
-        gameHub.on('Reconnected',      ()          => gameHub.call('JoinGame', gameId, playerName)),
+        gameHub.on('GameStateUpdated', state          => setGameState(state)),
+        gameHub.on('DiceRolled',       (d1, d2)       => settleDice([d1, d2])),
+        gameHub.on('CardDrawn',        card            => setDrawnCard(card)),
+        gameHub.on('TradeProposed',    offer           => setIncomingTrade(offer)),
+        gameHub.on('GamePaused',       ()              => setPaused(true)),
+        gameHub.on('GameResumed',      ()              => setPaused(false)),
+        gameHub.on('TurnWarning',      ({ message })   => toast(`⏰ ${message}`, 'warning')),
+        gameHub.on('PlayerKicked',     ({ playerName }) => toast(`${playerName} was removed`)),
+        gameHub.on('GameForceEnded',   ()              => { toast('Game ended', 'error'); onLeave(); }),
+        gameHub.on('Kicked',           msg             => { toast(msg, 'error'); onLeave(); }),
+        gameHub.on('Reconnected',      ()              => gameHub.call('JoinGame', gameId, playerName)),
     ];
 
     return () => unsubs.forEach(fn => fn());
@@ -385,7 +503,7 @@ User clicks Roll
               → setGameState(dto)     triggers React re-render
 ```
 
-`settleDice` is provided by `useDiceRoll()` in `animations.js`. If the server responds before the shuffle animation
+`settleDice` is provided by `useDiceRoll()` in `animation.js`. If the server responds before the shuffle animation
 completes, the real values are held in a ref and applied the moment the animation settles — preventing the dice from
 snapping before the visual completes.
 
@@ -395,7 +513,7 @@ snapping before the visual completes.
 
 ### GameRoomManager
 
-Thread-safe singleton. Single source of truth for all game instances.
+Thread-safe singleton. Single source of truth for all active game instances.
 
 | Method                          | Description                                              |
 |---------------------------------|----------------------------------------------------------|
@@ -423,18 +541,34 @@ pre-validation and structured logging.
 | `GetPendingTrades(gameId)`                    | `List<TradeOffer>`                     |
 | `GetPendingTradesForPlayer(gameId, playerId)` | Trades awaiting this player's response |
 
+### LobbyService
+
+Handles all pre-game room lifecycle operations, decoupled from the hub transport layer.
+
+| Method                              | Description                                         |
+|-------------------------------------|-----------------------------------------------------|
+| `CreateRoom(playerName, connId)`    | Initialise room, assign host                        |
+| `JoinRoom(gameId, playerName, connId)` | Validate and add player to waiting room          |
+| `LeaveRoom(gameId, playerId)`       | Remove player; promote new host if needed           |
+| `GetAvailableRooms()`               | Returns joinable rooms                              |
+
+### TurnTimerService
+
+Manages per-game countdown timers. Fires `TurnWarning` to the current player before auto-advancing the turn on expiry.
+
 ### Registration (Program.cs)
 
 ```csharp
 builder.Services.AddSingleton<GameRoomManager>();
 builder.Services.AddSingleton<TradeService>();
+builder.Services.AddSingleton<LobbyService>();
+builder.Services.AddSingleton<TurnTimerService>();
 builder.Services.AddHostedService<GameCleanupService>();
 
 builder.Services.AddSignalR();
-builder.Services.AddRazorPages();
 
 app.MapHub<GameHub>("/gamehub");
-app.MapRazorPages();
+app.MapHub<AdminHub>("/adminhub");
 ```
 
 Singletons are safe because all mutation is gated by `_lock` inside `GameRoomManager`. `GameCleanupService` receives
@@ -460,6 +594,10 @@ entries) · `CurrentTurnStartedAt`
 `RequestedPropertyIds[]` · `RequestedCash` · `Status` · `CreatedAt`
 
 **`GameRoomInfo`** — `GameId` · `HostId` · `PlayerCount` · `MaxPlayers` · `Players[]` · `CreatedAt`
+
+**`PlayerLobbyInfo`** — Lightweight player projection used in lobby broadcasts before game start
+
+**`ServerHealthStatsDto`** — Diagnostics payload served by `AdminHub`
 
 **`CardDto`** — `Type` · `Text` · `Amount?`
 
@@ -510,26 +648,26 @@ re-adds connection to the group and sends current `GameStateDto` directly to tha
 
 ## Intentional Exclusions
 
-**No auctions** — Property stays unowned if declined. Auctions prolong games and were removed after feedback.
+**No auctions by design** — Property stays unowned if declined. Auctions prolong games and were removed after feedback.
 
-**No database** — In-memory for session lifetime. A storage layer can be added later without touching the engine.
+**NoSQL database support** — State is persisted to JSON for recovery; a relational store can be added later by implementing
+`IGameStateStore` without touching the engine.
 
-**No admin powers** — Host is a normal player. No in-game privileges. Prevents abuse in public lobbies.
-
-**No roles or permissions** — Everyone can create and host games. Deliberately minimal.
+**Roles or permissions is given via Admin Hub** — everyone can create and host but Admin has its own Panel Client and diagnostics view and is rate-limited
 
 ---
 
 ## Architecture Invariants
 
-| Layer        | Responsibility                                        |
-|--------------|-------------------------------------------------------|
-| **Models**   | Data containers — no logic                            |
-| **Engine**   | All game rules — stateless, validated, logged         |
-| **Services** | Orchestration, locking, cleanup                       |
-| **Hub**      | Transport only — validate · delegate · broadcast      |
-| **DTOs**     | Typed serialisation boundary                          |
-| **React**    | Presentational — server is the single source of truth |
+| Layer            | Responsibility                                        |
+|------------------|-------------------------------------------------------|
+| **Models**       | Data containers — no logic                            |
+| **Engine**       | All game rules — stateless, validated, logged         |
+| **Services**     | Orchestration, locking, cleanup                       |
+| **Hub**          | Transport only — validate · delegate · broadcast      |
+| **DTOs**         | Typed serialisation boundary                          |
+| **Persistence**  | JSON file I/O, isolated from engine and hub           |
+| **React**        | Presentational — server is the single source of truth |
 
 - Hub never calls `GameEngine` directly — always via `GameRoomManager`
 - State mutations only happen inside `_lock`
