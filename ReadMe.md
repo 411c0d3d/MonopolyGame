@@ -1,6 +1,6 @@
 # Monopoly Online
 
-A full-featured multiplayer Monopoly game built with ASP.NET Core 10, SignalR, and React — playable in the browser with up to four players per room. Complete classic ruleset including cards, trading, buildings, jail, and rent.
+A full-featured multiplayer Monopoly game built with ASP.NET Core 10, SignalR, and React — playable in the browser with up to eight players per room. Complete classic ruleset including cards, trading, buildings, jail, and rent.
 
 ![GamePlay](GamePlay.gif)
 
