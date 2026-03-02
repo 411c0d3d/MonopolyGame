@@ -4,8 +4,95 @@
  * Renders the Monopoly board with player tokens, property ownership, inline dice, and action panel.
  * @param {{ board: any[], players: any[], animatedPositions: Object, dice: number[], rolling: boolean, actionPanel: any }} props
  */
+/** Returns the display icon for a given board space. */
+function getIcon(s) {
+    if (s.type === 'Railroad') { return '🚂'; }
+    if (s.type === 'Utility') {
+        if (s.name.includes('Water')) { return '💧'; }
+        if (s.name.includes('Electric')) { return '⚡'; }
+        return '🔌';
+    }
+    if (s.type === 'Tax') { return s.name.includes('Luxury') ? '💍' : '💰'; }
+    if (s.type === 'Chance') { return '❓'; }
+    if (s.type === 'CommunityChest') { return '🏛'; }
+    if (s.type === 'Go') { return '🏁'; }
+    if (s.type === 'Jail') { return '⛓'; }
+    if (s.type === 'FreeParking') { return '🅿'; }
+    if (s.type === 'GoToJail') { return '🚔'; }
+    return '';
+}
+
+/** Property inspect modal — purely presentational, defined outside Board so hops never remount it. */
+const InspectModal = React.memo(function InspectModal({space, board, players, onClose}) {
+    if (!space) { return null; }
+
+    const boardSpace = board?.find(b => b.id === space.id);
+    const owner = boardSpace?.ownerId ? players.find(p => p.id === boardSpace.ownerId) : null;
+    const icon = getIcon(space);
+
+    return (
+        <div className="overlay" onClick={onClose}>
+            <div className="mbox" onClick={e => e.stopPropagation()}>
+                <div style={{marginBottom: 16}}>
+                    {space.color && (
+                        <div style={{
+                            background: BCOLORS[space.color],
+                            height: 40,
+                            borderRadius: '8px 8px 0 0',
+                            marginBottom: 12,
+                        }}/>
+                    )}
+                    <h2 style={{fontSize: 24, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 10}}>
+                        {icon && <span style={{fontSize: 26}}>{icon}</span>}
+                        {space.name.replace('\n', ' ')}
+                    </h2>
+                    <div style={{fontSize: 13, color: '#999', marginBottom: 16}}>
+                        {space.type} • Position #{space.id}
+                    </div>
+                </div>
+                {boardSpace && (
+                    <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+                        {boardSpace.purchasePrice && (
+                            <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14}}>
+                                <span style={{color: '#999'}}>Purchase Price</span>
+                                <strong style={{color: 'var(--green)'}}>${boardSpace.purchasePrice}</strong>
+                            </div>
+                        )}
+                        {owner && (
+                            <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14}}>
+                                <span style={{color: '#999'}}>Owner</span>
+                                <strong>{owner.name}</strong>
+                            </div>
+                        )}
+                        {!owner && boardSpace.purchasePrice && (
+                            <div style={{
+                                background: 'var(--cream)',
+                                padding: 10,
+                                borderRadius: 8,
+                                fontSize: 12,
+                                color: '#666',
+                                textAlign: 'center',
+                            }}>
+                                Available for purchase
+                            </div>
+                        )}
+                        {boardSpace.isMortgaged &&
+                            <span className="badge bg-red" style={{alignSelf: 'flex-start'}}>Mortgaged</span>}
+                        {boardSpace.houseCount > 0 &&
+                            <div style={{fontSize: 14}}>🏠 {boardSpace.houseCount} house{boardSpace.houseCount !== 1 ? 's' : ''}</div>}
+                        {boardSpace.hasHotel &&
+                            <div style={{fontSize: 14}}>🏨 Hotel</div>}
+                    </div>
+                )}
+                <button className="btn btn-ghost btn-full" style={{marginTop: 20}} onClick={onClose}>Close</button>
+            </div>
+        </div>
+    );
+});
+
 function Board({board, players, animatedPositions = {}, dice = [], rolling = false, actionPanel = null}) {
     const [inspectSpace, setInspectSpace] = useState(null);
+    const closeInspect = useCallback(() => setInspectSpace(null), []);
     const wrapRef = useRef(null);
     const cellRefs = useRef({});
     const [cellPos, setCellPos] = useState({});
@@ -73,42 +160,7 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
     };
 
     /** Maps a space to its display emoji icon. */
-    const getIcon = (s) => {
-        if (s.type === 'Railroad') {
-            return '🚂';
-        }
-        if (s.type === 'Utility') {
-            if (s.name.includes('Water')) {
-                return '💧';
-            }
-            if (s.name.includes('Electric')) {
-                return '⚡';
-            }
-            return '🔌';
-        }
-        if (s.type === 'Tax') {
-            return s.name.includes('Luxury') ? '💍' : '💰';
-        }
-        if (s.type === 'Chance') {
-            return '❓';
-        }
-        if (s.type === 'CommunityChest') {
-            return '🏛';
-        }
-        if (s.type === 'Go') {
-            return '🏁';
-        }
-        if (s.type === 'Jail') {
-            return '⛓';
-        }
-        if (s.type === 'FreeParking') {
-            return '🅿';
-        }
-        if (s.type === 'GoToJail') {
-            return '🚔';
-        }
-        return '';
-    };
+    // getIcon moved to module scope — see top of file
 
     /** Returns the price label or non-breaking space so the price slot is always filled. */
     const getPriceDisplay = (space, boardSpace) => {
@@ -343,74 +395,7 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
         );
     };
 
-    /** Inspect modal shown when a space cell is clicked. */
-    const InspectModal = () => {
-        if (!inspectSpace) {
-            return null;
-        }
-        const boardSpace = board?.find(b => b.id === inspectSpace.id);
-        const owner = boardSpace?.ownerId ? activePlayers.find(p => p.id === boardSpace.ownerId) : null;
-
-        return (
-            <div className="overlay" onClick={() => setInspectSpace(null)}>
-                <div className="mbox" onClick={e => e.stopPropagation()}>
-                    <div style={{marginBottom: 16}}>
-                        {inspectSpace.color && (
-                            <div style={{
-                                background: BCOLORS[inspectSpace.color],
-                                height: 40,
-                                borderRadius: '8px 8px 0 0',
-                                marginBottom: 12
-                            }}/>
-                        )}
-                        <h2 style={{fontSize: 24, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 10}}>
-                            {getIcon(inspectSpace) && <span style={{fontSize: 26}}>{getIcon(inspectSpace)}</span>}
-                            {inspectSpace.name.replace('\n', ' ')}
-                        </h2>
-                        <div style={{fontSize: 13, color: '#999', marginBottom: 16}}>
-                            {inspectSpace.type} • Position #{inspectSpace.id}
-                        </div>
-                    </div>
-                    {boardSpace && (
-                        <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
-                            {boardSpace.purchasePrice && (
-                                <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14}}>
-                                    <span style={{color: '#999'}}>Purchase Price</span>
-                                    <strong style={{color: 'var(--green)'}}>${boardSpace.purchasePrice}</strong>
-                                </div>
-                            )}
-                            {owner && (
-                                <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14}}>
-                                    <span style={{color: '#999'}}>Owner</span>
-                                    <strong>{owner.name}</strong>
-                                </div>
-                            )}
-                            {!owner && boardSpace.purchasePrice && (
-                                <div style={{
-                                    background: 'var(--cream)',
-                                    padding: 10,
-                                    borderRadius: 8,
-                                    fontSize: 12,
-                                    color: '#666',
-                                    textAlign: 'center'
-                                }}>
-                                    Available for purchase
-                                </div>
-                            )}
-                            {boardSpace.isMortgaged &&
-                                <span className="badge bg-red" style={{alignSelf: 'flex-start'}}>Mortgaged</span>}
-                            {boardSpace.houseCount > 0 && <div
-                                style={{fontSize: 14}}>🏠 {boardSpace.houseCount} house{boardSpace.houseCount !== 1 ? 's' : ''}</div>}
-                            {boardSpace.hasHotel && <div style={{fontSize: 14}}>🏨 Hotel</div>}
-                        </div>
-                    )}
-                    <button className="btn btn-ghost btn-full" style={{marginTop: 20}}
-                            onClick={() => setInspectSpace(null)}>Close
-                    </button>
-                </div>
-            </div>
-        );
-    };
+    // InspectModal extracted to module scope as React.memo
 
     return (
         <div className="bwrap" ref={wrapRef} style={{position: 'relative'}}>
@@ -595,7 +580,7 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
                 );
             })}
 
-            <InspectModal/>
+            <InspectModal space={inspectSpace} board={board} players={activePlayers} onClose={closeInspect}/>
         </div>
     );
 }

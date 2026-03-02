@@ -1088,6 +1088,15 @@ h1, h2, h3 {
     }
 }
 
+@keyframes card-drain {
+    from {
+        transform: scaleX(1);
+    }
+    to {
+        transform: scaleX(0);
+    }
+}
+
 .pip {
     border-radius: 50%;
     background: #1a1040;

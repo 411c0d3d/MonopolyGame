@@ -733,32 +733,11 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, me, gameId, onClose
 }
 
 /**
- * Auto-dismissing card reveal modal. Shows for 5 seconds then calls onDismiss.
+ * Purely presentational card reveal modal. Timer and dismiss logic live in GamePage.
+ * Progress bar is driven by a CSS animation — zero JS ticking, zero state, zero re-renders.
  * @param {{ card: {type: string, text: string, amount?: number}, onDismiss: function }} props
  */
 function CardDrawnModal({card, onDismiss}) {
-    const [progress, setProgress] = React.useState(100);
-    const DURATION = 5000;
-    const onDismissRef = React.useRef(onDismiss);
-    onDismissRef.current = onDismiss;
-
-    React.useEffect(() => {
-        const start = Date.now();
-        let rafId;
-        const tick = () => {
-            const elapsed = Date.now() - start;
-            const remaining = Math.max(0, 100 - (elapsed / DURATION) * 100);
-            setProgress(remaining);
-            if (elapsed < DURATION) {
-                rafId = requestAnimationFrame(tick);
-            } else {
-                onDismissRef.current();
-            }
-        };
-        rafId = requestAnimationFrame(tick);
-        return () => cancelAnimationFrame(rafId);
-    }, []);
-
     const isChance = card.type === 'Chance';
     const accentColor = isChance ? '#b8860b' : '#2d6a4f';
     const bgColor = isChance ? '#fff9c4' : '#c8e6c9';
@@ -768,7 +747,6 @@ function CardDrawnModal({card, onDismiss}) {
         <div className="overlay" onClick={onDismiss}>
             <div className="mbox" style={{maxWidth: 380, textAlign: 'center', padding: 0, overflow: 'hidden'}}
                  onClick={e => e.stopPropagation()}>
-                {/* Card header */}
                 <div style={{
                     background: bgColor,
                     padding: 'clamp(14px, 3vw, 22px) 24px 12px',
@@ -784,8 +762,6 @@ function CardDrawnModal({card, onDismiss}) {
                         color: accentColor,
                     }}>{card.type}</div>
                 </div>
-
-                {/* Card body */}
                 <div style={{padding: '20px 24px 16px', background: 'rgba(14,24,62,0.96)'}}>
                     <p style={{
                         fontSize: 15,
@@ -794,7 +770,7 @@ function CardDrawnModal({card, onDismiss}) {
                         lineHeight: 1.55,
                         marginBottom: card.amount ? 14 : 0,
                     }}>{card.text}</p>
-                    {card.amount !== undefined && card.amount !== 0 && (
+                    {card.amount != null && card.amount !== 0 && (
                         <div style={{
                             display: 'inline-flex',
                             alignItems: 'center',
@@ -811,23 +787,16 @@ function CardDrawnModal({card, onDismiss}) {
                         </div>
                     )}
                 </div>
-
-                {/* Auto-dismiss progress bar */}
+                {/* Progress bar driven by CSS animation — completely outside React */}
                 <div style={{height: 3, background: 'rgba(255,255,255,0.08)'}}>
                     <div style={{
                         height: '100%',
-                        width: `${progress}%`,
+                        width: '100%',
                         background: accentColor,
-                        transition: 'none',
+                        transformOrigin: 'left',
+                        animation: 'card-drain 5s linear forwards',
                     }}/>
                 </div>
-                <div style={{
-                    padding: '7px 24px 10px',
-                    fontSize: 10,
-                    color: 'rgba(255,255,255,0.3)',
-                    background: 'rgba(14,24,62,0.96)',
-                    letterSpacing: '0.05em',
-                }}>Tap to dismiss · auto-closing in {Math.ceil(progress / 20)}s</div>
             </div>
         </div>
     );
@@ -951,6 +920,18 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
     const [buyModalOpen, setBuyModalOpen] = useState(false);
     const [mortgagePending, setMortgagePending] = useState(null); // { prop, space }
     const [drawnCard, setDrawnCard] = useState(null); // { type, text, amount? }
+    const cardTimerRef = React.useRef(null);
+
+    const showCard = useCallback((card) => {
+        clearTimeout(cardTimerRef.current);
+        setDrawnCard(card);
+        cardTimerRef.current = setTimeout(() => setDrawnCard(null), 3500);
+    }, []);
+
+    const dismissCard = useCallback(() => {
+        clearTimeout(cardTimerRef.current);
+        setDrawnCard(null);
+    }, []);
     const [liquidateOpen, setLiquidateOpen] = useState(false);
     const [logExpanded, setLogExpanded] = useState(false);
     const [buildPending, setBuildPending] = useState(null); // { prop, space, buildType }
@@ -979,7 +960,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
             gameHub.on('TradeProposed', offer => setIncomingTrade(offer)),
             gameHub.on('GamePaused', () => setPaused(true)),
             gameHub.on('GameResumed', () => setPaused(false)),
-            gameHub.on('CardDrawn', card => setDrawnCard(card)),
+            gameHub.on('CardDrawn', card => showCard(card)),
             gameHub.on('DiceRolled', (d1, d2) => settleDice([d1, d2])),
             gameHub.on('GameForceEnded', () => {
                 toast('Game ended by admin', 'error');
@@ -1357,7 +1338,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                 />
             )}
             {drawnCard && (
-                <CardDrawnModal card={drawnCard} onDismiss={() => setDrawnCard(null)}/>
+                <CardDrawnModal card={drawnCard} onDismiss={dismissCard}/>
             )}
             {incomingTrade && (
                 <IncomingTradeModal offer={incomingTrade} me={me} gameId={gameId} board={boardSpaces}
