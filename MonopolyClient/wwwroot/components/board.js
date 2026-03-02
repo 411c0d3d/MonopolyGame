@@ -497,19 +497,20 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
                 {/* Center */}
                 <div className="bcenter">
                     {/* Title */}
-                    <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0}}>
+                    <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0, marginTop: 'clamp(-18px, -2.5cqw, -8px)', marginBottom: 'clamp(8px, 1.8cqw, 18px)'}}>
                         <div style={{
                             fontFamily: 'Playfair Display,serif',
-                            fontSize: 'clamp(14px, 3cqw, 28px)',
+                            fontSize: 'clamp(36px, 3.8cqw, 42px)',
                             fontWeight: 900,
                             textAlign: 'center',
-                            letterSpacing: '0.05em'
+                            letterSpacing: '0.05em',
+                            color: 'rgba(212, 169, 68, 0.52)',
                         }}>
                             MONOPOLY
                         </div>
                         <div style={{
                             fontSize: 'clamp(7px, 1.3cqw, 12px)',
-                            color: '#aaa',
+                            color: 'rgba(170,170,170,0.45)',
                             letterSpacing: '0.15em',
                             textTransform: 'uppercase'
                         }}>Online Edition
@@ -519,8 +520,10 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
                     {/* Dice — 3D tray handles idle / rolling / settled internally */}
                     <DiceTray dice={dice} rolling={rolling}/>
 
-                    {/* Action panel */}
-                    {actionPanel}
+                    {/* Action panel — pulled closer to dice */}
+                    <div style={{width: '100%', marginTop: '-4px'}}>
+                        {actionPanel}
+                    </div>
 
                     {/* Divider */}
                     <div style={{

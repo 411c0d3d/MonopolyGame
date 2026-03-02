@@ -96,6 +96,11 @@ public class GameHub : Hub
                     game.HostId = player.Id;
                 }
             }
+            else
+            {
+                await Clients.Caller.SendAsync("Error", "You are not a participant in this game");
+                return;
+            }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, gameId);
             await PersistAndBroadcast(gameId, game);
@@ -187,7 +192,16 @@ public class GameHub : Hub
         }
         else
         {
-            engine.MovePlayer(total);
+            var drawnCard = engine.MovePlayer(total);
+            if (drawnCard != null)
+            {
+                await Clients.Group(gameId).SendAsync("CardDrawn", new
+                {
+                    type = drawnCard.DeckType.ToString(),
+                    text = drawnCard.Title,
+                    amount = drawnCard.Amount
+                });
+            }
         }
 
         await PersistAndBroadcast(gameId, game);

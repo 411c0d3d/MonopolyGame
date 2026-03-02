@@ -99,12 +99,12 @@ public class GameEngine
     /// <summary>
     /// Move the current player by the dice roll amount. Handle Go, jail, landing on properties, etc.
     /// </summary>
-    public void MovePlayer(int diceTotal)
+    public Card? MovePlayer(int diceTotal)
     {
         var player = _state.GetCurrentPlayer();
         if (player == null)
         {
-            return;
+            return null;
         }
 
         // Ensure result is always positive even with negative diceTotal
@@ -119,14 +119,13 @@ public class GameEngine
 
         player.MoveTo(newPosition);
 
-        // Handle the space they landed on
-        HandleLandingOnSpace(player, newPosition);
+        return HandleLandingOnSpace(player, newPosition);
     }
 
     /// <summary>
-    /// Handle what happens when a player lands on a space.
+    /// Handles landing logic and returns any drawn card, or null.
     /// </summary>
-    private void HandleLandingOnSpace(Player player, int position)
+    private Card? HandleLandingOnSpace(Player player, int position)
     {
         var space = _state.Board.GetProperty(position);
 
@@ -153,12 +152,10 @@ public class GameEngine
                 break;
 
             case PropertyType.Chance:
-                DrawAndExecuteCard(CardDeck.Chance);
-                break;
+                return DrawAndExecuteCard(CardDeck.Chance);
 
             case PropertyType.CommunityChest:
-                DrawAndExecuteCard(CardDeck.CommunityChest);
-                break;
+                return DrawAndExecuteCard(CardDeck.CommunityChest);
 
             case PropertyType.FreeParking:
                 _state.LogAction($"{player.Name} is on Free Parking.");
@@ -168,6 +165,8 @@ public class GameEngine
                 _state.LogAction($"{player.Name} landed on Go.");
                 break;
         }
+
+        return null;
     }
 
     /// <summary>
@@ -510,13 +509,13 @@ public class GameEngine
     }
 
     /// <summary>
-    /// Draw a card from Chance or Community Chest and execute its effect.
+    /// Draws a card from the given deck, executes its effect, and returns the card for the hub to broadcast.
     /// </summary>
-    public void DrawAndExecuteCard(CardDeck deck)
+    public Card DrawAndExecuteCard(CardDeck deck)
     {
         var player = _state.GetCurrentPlayer();
         if (player == null)
-            return;
+            return null!;
 
         var card = _cardDeckManager.DrawCard(deck);
         _state.LogAction($"{player.Name} drew: {card.Title}");
@@ -528,6 +527,8 @@ public class GameEngine
         {
             _cardDeckManager.ReturnCardToBottom(card);
         }
+
+        return card;
     }
 
     /// <summary>

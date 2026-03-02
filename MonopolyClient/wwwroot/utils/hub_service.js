@@ -28,6 +28,7 @@ class HubService {
             'GameCreated',
             'GameRemoved',
             'DiceRolled',
+            'CardDrawn',
         ];
 
         events.forEach(evt => {

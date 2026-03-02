@@ -1,4 +1,4 @@
-/* globals useState, useEffect, useRef, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, React, ReactDOM, signalR, TurnTimer, usePlayerHop, useDiceRoll, DiceTray, ChestCardPopup */
+/* globals useState, useEffect, useRef, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, React, ReactDOM, signalR, TurnTimer, usePlayerHop, useDiceRoll, DiceTray */
 
 // components/game_page.js — depends on constants.js, signalr.js, header.js, board.js, animations.js.
 
@@ -32,12 +32,18 @@ function JailModal({player, onClose, onAct}) {
                 <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                     {player.keptCardCount > 0 && (
                         <button className="btn btn-gold btn-full"
-                                onClick={() => { onAct(true, false); onClose(); }}>
+                                onClick={() => {
+                                    onAct(true, false);
+                                    onClose();
+                                }}>
                             🃏 Use Get Out of Jail Free Card
                         </button>
                     )}
                     <button className="btn btn-ghost btn-full" disabled={!canAffordFine}
-                            onClick={() => { onAct(false, true); onClose(); }}
+                            onClick={() => {
+                                onAct(false, true);
+                                onClose();
+                            }}
                             style={{display: 'flex', justifyContent: 'space-between'}}>
                         <span>💵 Pay $50 Fine</span>
                         <span style={{color: canAffordFine ? 'var(--red)' : '#aaa', fontSize: 11}}>
@@ -45,7 +51,10 @@ function JailModal({player, onClose, onAct}) {
                         </span>
                     </button>
                     <button className="btn btn-ghost btn-full"
-                            onClick={() => { onAct(false, false); onClose(); }}>
+                            onClick={() => {
+                                onAct(false, false);
+                                onClose();
+                            }}>
                         🎲 Try to Roll Doubles
                     </button>
                     <button className="btn btn-sm btn-ghost btn-full" style={{color: '#aaa'}} onClick={onClose}>
@@ -61,7 +70,7 @@ function JailModal({player, onClose, onAct}) {
  * Modal shown when another player sends a trade proposal.
  * @param {{ offer: any, me: any, gameId: string, onDone: function }} props
  */
-function IncomingTradeModal({offer, me, gameId, onDone}) {
+function IncomingTradeModal({offer, me, gameId, board, onDone}) {
     const handleAccept = () => {
         gameHub.call('RespondToTrade', gameId, offer.id, true);
         onDone();
@@ -74,7 +83,7 @@ function IncomingTradeModal({offer, me, gameId, onDone}) {
     const netCash = (offer.offeredCash || 0) - (offer.requestedCash || 0);
     const balanceAfter = me ? me.cash + netCash : null;
 
-    /** Renders a property list row with color swatch and purchase price. */
+    /** Renders a property list row with color swatch, name, and price from live board data. */
     const renderPropertyGroups = (ids) => {
         const groups = groupIdsByColor(ids);
         if (!groups.length) {
@@ -83,27 +92,36 @@ function IncomingTradeModal({offer, me, gameId, onDone}) {
         return groups.map(({color, items}) => (
             <div key={color}>
                 <ColorGroupHeader color={color}/>
-                {items.map(({pid, space}) => (
-                    <div key={String(pid)} style={{
-                        display: 'flex', alignItems: 'center', gap: 5,
-                        fontSize: 12, marginBottom: 4, paddingLeft: 2,
-                    }}>
-                        {space?.color
-                            ? <div style={{width: 7, height: 14, background: BCOLORS[space.color], borderRadius: 1, flexShrink: 0}}/>
-                            : <span>🏠</span>
-                        }
-                        <span style={{flex: 1}}>{space ? space.name.replace('\n', ' ') : `#${pid}`}</span>
-                        {(space?.price || space?.purchasePrice) && (
-                            <span style={{color: 'var(--gold)', fontWeight: 700, fontSize: 11}}>
-                                ${(space.price || space.purchasePrice).toLocaleString()}
+                {items.map(({pid, space}) => {
+                    const boardSpace = board?.find(b => b.id === pid);
+                    const price = boardSpace?.purchasePrice || space?.price;
+                    return (
+                        <div key={String(pid)} style={{
+                            display: 'flex', alignItems: 'center', gap: 5,
+                            fontSize: 12, marginBottom: 4, paddingLeft: 2,
+                        }}>
+                            {space?.color
+                                ? <div style={{
+                                    width: 7,
+                                    height: 14,
+                                    background: BCOLORS[space.color],
+                                    borderRadius: 1,
+                                    flexShrink: 0
+                                }}/>
+                                : <span>🏠</span>
+                            }
+                            <span style={{flex: 1}}>{space ? space.name.replace('\n', ' ') : `#${pid}`}</span>
+                            {price && (
+                                <span style={{color: 'var(--gold)', fontWeight: 700, fontSize: 11}}>
+                                ${price.toLocaleString()}
                             </span>
-                        )}
-                    </div>
-                ))}
+                            )}
+                        </div>
+                    );
+                })}
             </div>
         ));
     };
-
     return (
         <div className="overlay">
             <div className="mbox">
@@ -191,7 +209,12 @@ function ProposeTradeModal({target, me, myProps, board, gameId, turnStartedAt, o
             offeredCardIds: [],
             requestedCardIds: [],
         };
-        console.log('[TRADE] Sending ProposeTrade', {gameId, toPlayerId: target.id, toPlayerName: target.name, payload});
+        console.log('[TRADE] Sending ProposeTrade', {
+            gameId,
+            toPlayerId: target.id,
+            toPlayerName: target.name,
+            payload
+        });
         gameHub.call('ProposeTrade', gameId, target.id, payload)
             .then(() => {
                 console.log('[TRADE] ProposeTrade call resolved (hub accepted the invocation)');
@@ -227,7 +250,13 @@ function ProposeTradeModal({target, me, myProps, board, gameId, turnStartedAt, o
                                 onChange={() => toggleProp(selectedList, setter, prop.id)}
                             />
                             {prop.space?.color && (
-                                <div style={{width: 7, height: 14, background: BCOLORS[prop.space.color], borderRadius: 1, flexShrink: 0}}/>
+                                <div style={{
+                                    width: 7,
+                                    height: 14,
+                                    background: BCOLORS[prop.space.color],
+                                    borderRadius: 1,
+                                    flexShrink: 0
+                                }}/>
                             )}
                             <span style={{flex: 1}}>{spaceName}</span>
                             {price && (
@@ -258,7 +287,12 @@ function ProposeTradeModal({target, me, myProps, board, gameId, turnStartedAt, o
                             <input className="input" type="number" min="0" value={offeredCash}
                                    onChange={e => setOfferedCash(e.target.value)}/>
                         </div>
-                        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9}}>
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            marginBottom: 9
+                        }}>
                             <span className="slabel" style={{marginBottom: 0}}>Your Turn</span>
                             <TurnTimer startedAt={turnStartedAt}/>
                         </div>
@@ -441,15 +475,30 @@ function MortgageConfirmModal({prop, space, me, onConfirm, onClose}) {
         <div className="overlay">
             <div className="mbox" style={{maxWidth: 400}}>
                 {space?.color && (
-                    <div style={{background: BCOLORS[space.color], height: 36, borderRadius: '8px 8px 0 0', marginBottom: 14}}/>
+                    <div style={{
+                        background: BCOLORS[space.color],
+                        height: 36,
+                        borderRadius: '8px 8px 0 0',
+                        marginBottom: 14
+                    }}/>
                 )}
                 <h3 style={{marginBottom: 4}}>{isMortgaged ? 'Unmortgage' : 'Mortgage'} Property?</h3>
                 <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
                     {space?.color && (
-                        <div style={{width: 8, height: 18, background: BCOLORS[space.color], borderRadius: 2, flexShrink: 0}}/>
+                        <div style={{
+                            width: 8,
+                            height: 18,
+                            background: BCOLORS[space.color],
+                            borderRadius: 2,
+                            flexShrink: 0
+                        }}/>
                     )}
                     <span style={{fontWeight: 600, fontSize: 15}}>{prop.name}</span>
-                    <span style={{color: '#aaa', fontSize: 12, marginLeft: 'auto'}}>${purchasePrice.toLocaleString()}</span>
+                    <span style={{
+                        color: '#aaa',
+                        fontSize: 12,
+                        marginLeft: 'auto'
+                    }}>${purchasePrice.toLocaleString()}</span>
                 </div>
                 {me && <ModalBalanceBar cash={me.cash}/>}
                 <div style={{
@@ -462,7 +511,13 @@ function MortgageConfirmModal({prop, space, me, onConfirm, onClose}) {
                                 <span style={{color: '#aaa'}}>Purchase Price</span>
                                 <strong>${purchasePrice.toLocaleString()}</strong>
                             </div>
-                            <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 15, borderTop: '1px solid var(--border)', paddingTop: 9}}>
+                            <div style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                fontSize: 15,
+                                borderTop: '1px solid var(--border)',
+                                paddingTop: 9
+                            }}>
                                 <span style={{color: '#aaa'}}>You will receive</span>
                                 <strong style={{color: 'var(--green)'}}>+${mortgageValue.toLocaleString()}</strong>
                             </div>
@@ -482,7 +537,13 @@ function MortgageConfirmModal({prop, space, me, onConfirm, onClose}) {
                                 <span style={{color: '#aaa'}}>Mortgage Value</span>
                                 <strong>${mortgageValue.toLocaleString()}</strong>
                             </div>
-                            <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 15, borderTop: '1px solid var(--border)', paddingTop: 9}}>
+                            <div style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                fontSize: 15,
+                                borderTop: '1px solid var(--border)',
+                                paddingTop: 9
+                            }}>
                                 <span style={{color: '#aaa'}}>Cost to Unmortgage</span>
                                 <strong style={{color: 'var(--red)'}}>−${unmortgageCost.toLocaleString()}</strong>
                             </div>
@@ -513,7 +574,10 @@ function MortgageConfirmModal({prop, space, me, onConfirm, onClose}) {
                     <button
                         className={`btn btn-full ${isMortgaged ? 'btn-green' : 'btn-red'}`}
                         disabled={!canAfford}
-                        onClick={() => { onConfirm(); onClose(); }}
+                        onClick={() => {
+                            onConfirm();
+                            onClose();
+                        }}
                     >
                         {isMortgaged ? `✓ Unmortgage for $${unmortgageCost.toLocaleString()}` : `✓ Mortgage for $${mortgageValue.toLocaleString()}`}
                     </button>
@@ -607,14 +671,21 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, me, gameId, onClose
                         }}>
                             <input type="checkbox" checked={isSelected} onChange={() => toggle(prop.id)}/>
                             {space?.color && (
-                                <div style={{width: 8, height: 20, background: BCOLORS[space.color] || '#ccc', borderRadius: 2, flexShrink: 0}}/>
+                                <div style={{
+                                    width: 8,
+                                    height: 20,
+                                    background: BCOLORS[space.color] || '#ccc',
+                                    borderRadius: 2,
+                                    flexShrink: 0
+                                }}/>
                             )}
                             <div style={{flex: 1, minWidth: 0}}>
                                 <div style={{fontWeight: 600, fontSize: 12}}>{prop.name}</div>
                                 <div style={{fontSize: 11, color: '#aaa'}}>
                                     {info.label}
                                     {info.perUnit > 0 && ` · $${info.perUnit} each`}
-                                    {space?.houseCost && <span style={{color: '#888'}}> (build cost: ${space.houseCost})</span>}
+                                    {space?.houseCost &&
+                                        <span style={{color: '#888'}}> (build cost: ${space.houseCost})</span>}
                                 </div>
                             </div>
                             <div style={{fontSize: 13, fontWeight: 700, color: 'var(--green)', flexShrink: 0}}>
@@ -631,12 +702,16 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, me, gameId, onClose
                     }}>
                         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                             <span style={{color: '#aaa', fontSize: 13}}>Total payout</span>
-                            <strong style={{fontSize: 18, color: 'var(--green)'}}>+${totalPayout.toLocaleString()}</strong>
+                            <strong
+                                style={{fontSize: 18, color: 'var(--green)'}}>+${totalPayout.toLocaleString()}</strong>
                         </div>
                         {balanceAfter !== null && totalPayout > 0 && (
                             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                                 <span style={{color: '#aaa', fontSize: 12}}>Balance after</span>
-                                <strong style={{color: 'var(--gold)', fontSize: 14}}>${balanceAfter.toLocaleString()}</strong>
+                                <strong style={{
+                                    color: 'var(--gold)',
+                                    fontSize: 14
+                                }}>${balanceAfter.toLocaleString()}</strong>
                             </div>
                         )}
                     </div>
@@ -658,6 +733,107 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, me, gameId, onClose
 }
 
 /**
+ * Auto-dismissing card reveal modal. Shows for 5 seconds then calls onDismiss.
+ * @param {{ card: {type: string, text: string, amount?: number}, onDismiss: function }} props
+ */
+function CardDrawnModal({card, onDismiss}) {
+    const [progress, setProgress] = React.useState(100);
+    const DURATION = 5000;
+    const onDismissRef = React.useRef(onDismiss);
+    onDismissRef.current = onDismiss;
+
+    React.useEffect(() => {
+        const start = Date.now();
+        let rafId;
+        const tick = () => {
+            const elapsed = Date.now() - start;
+            const remaining = Math.max(0, 100 - (elapsed / DURATION) * 100);
+            setProgress(remaining);
+            if (elapsed < DURATION) {
+                rafId = requestAnimationFrame(tick);
+            } else {
+                onDismissRef.current();
+            }
+        };
+        rafId = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(rafId);
+    }, []);
+
+    const isChance = card.type === 'Chance';
+    const accentColor = isChance ? '#b8860b' : '#2d6a4f';
+    const bgColor = isChance ? '#fff9c4' : '#c8e6c9';
+    const icon = isChance ? '❓' : '🏛';
+
+    return (
+        <div className="overlay" onClick={onDismiss}>
+            <div className="mbox" style={{maxWidth: 380, textAlign: 'center', padding: 0, overflow: 'hidden'}}
+                 onClick={e => e.stopPropagation()}>
+                {/* Card header */}
+                <div style={{
+                    background: bgColor,
+                    padding: 'clamp(14px, 3vw, 22px) 24px 12px',
+                    borderBottom: `2px solid ${accentColor}44`,
+                }}>
+                    <div style={{fontSize: 42, lineHeight: 1, marginBottom: 8}}>{icon}</div>
+                    <div style={{
+                        fontFamily: 'Playfair Display, serif',
+                        fontWeight: 700,
+                        fontSize: 13,
+                        letterSpacing: '0.12em',
+                        textTransform: 'uppercase',
+                        color: accentColor,
+                    }}>{card.type}</div>
+                </div>
+
+                {/* Card body */}
+                <div style={{padding: '20px 24px 16px', background: 'rgba(14,24,62,0.96)'}}>
+                    <p style={{
+                        fontSize: 15,
+                        fontWeight: 500,
+                        color: 'var(--ink)',
+                        lineHeight: 1.55,
+                        marginBottom: card.amount ? 14 : 0,
+                    }}>{card.text}</p>
+                    {card.amount !== undefined && card.amount !== 0 && (
+                        <div style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            background: card.amount > 0 ? 'rgba(26,158,120,0.15)' : 'rgba(229,57,53,0.15)',
+                            border: `1px solid ${card.amount > 0 ? 'rgba(26,158,120,0.3)' : 'rgba(229,57,53,0.3)'}`,
+                            borderRadius: 8,
+                            padding: '5px 14px',
+                            fontSize: 16,
+                            fontWeight: 700,
+                            color: card.amount > 0 ? 'var(--green-light)' : 'var(--red)',
+                        }}>
+                            {card.amount > 0 ? '+' : ''}{card.amount < 0 ? `-$${Math.abs(card.amount).toLocaleString()}` : `$${card.amount.toLocaleString()}`}
+                        </div>
+                    )}
+                </div>
+
+                {/* Auto-dismiss progress bar */}
+                <div style={{height: 3, background: 'rgba(255,255,255,0.08)'}}>
+                    <div style={{
+                        height: '100%',
+                        width: `${progress}%`,
+                        background: accentColor,
+                        transition: 'none',
+                    }}/>
+                </div>
+                <div style={{
+                    padding: '7px 24px 10px',
+                    fontSize: 10,
+                    color: 'rgba(255,255,255,0.3)',
+                    background: 'rgba(14,24,62,0.96)',
+                    letterSpacing: '0.05em',
+                }}>Tap to dismiss · auto-closing in {Math.ceil(progress / 20)}s</div>
+            </div>
+        </div>
+    );
+}
+
+/**
  * Confirmation modal for building a house or hotel on a property.
  * @param {{ prop: any, space: any, buildType: 'house'|'hotel', me: any, onConfirm: function, onClose: function }} props
  */
@@ -671,12 +847,23 @@ function BuildConfirmModal({prop, space, buildType, me, onConfirm, onClose}) {
         <div className="overlay">
             <div className="mbox" style={{maxWidth: 380}}>
                 {space?.color && (
-                    <div style={{background: BCOLORS[space.color], height: 34, borderRadius: '8px 8px 0 0', marginBottom: 14}}/>
+                    <div style={{
+                        background: BCOLORS[space.color],
+                        height: 34,
+                        borderRadius: '8px 8px 0 0',
+                        marginBottom: 14
+                    }}/>
                 )}
                 <h3 style={{marginBottom: 4}}>{isHotel ? '🏨 Build Hotel' : '🏠 Build House'}</h3>
                 <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14}}>
                     {space?.color && (
-                        <div style={{width: 8, height: 18, background: BCOLORS[space.color], borderRadius: 2, flexShrink: 0}}/>
+                        <div style={{
+                            width: 8,
+                            height: 18,
+                            background: BCOLORS[space.color],
+                            borderRadius: 2,
+                            flexShrink: 0
+                        }}/>
                     )}
                     <span style={{fontWeight: 600, fontSize: 15}}>{prop.name}</span>
                 </div>
@@ -690,7 +877,13 @@ function BuildConfirmModal({prop, space, buildType, me, onConfirm, onClose}) {
                         <strong style={{color: 'var(--red)'}}>−${cost.toLocaleString()}</strong>
                     </div>
                     {balanceAfter !== null && (
-                        <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14, borderTop: '1px solid var(--border)', paddingTop: 9}}>
+                        <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            fontSize: 14,
+                            borderTop: '1px solid var(--border)',
+                            paddingTop: 9
+                        }}>
                             <span style={{color: '#aaa'}}>Balance After</span>
                             <strong style={{color: canAfford ? 'var(--gold)' : 'var(--red)'}}>
                                 ${balanceAfter.toLocaleString()}
@@ -708,7 +901,10 @@ function BuildConfirmModal({prop, space, buildType, me, onConfirm, onClose}) {
                     </div>
                 )}
                 <div style={{display: 'flex', gap: 9}}>
-                    <button className="btn btn-green btn-full" disabled={!canAfford} onClick={() => { onConfirm(); onClose(); }}>
+                    <button className="btn btn-green btn-full" disabled={!canAfford} onClick={() => {
+                        onConfirm();
+                        onClose();
+                    }}>
                         ✓ Confirm
                     </button>
                     <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
@@ -729,7 +925,11 @@ function ResignModal({onConfirm, onClose}) {
                     You will be eliminated and your properties returned to the bank. This cannot be undone.
                 </p>
                 <div style={{display: 'flex', gap: 9}}>
-                    <button className="btn btn-red btn-full" onClick={() => { onConfirm(); onClose(); }}>🏳 Yes, Resign</button>
+                    <button className="btn btn-red btn-full" onClick={() => {
+                        onConfirm();
+                        onClose();
+                    }}>🏳 Yes, Resign
+                    </button>
                     <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
                 </div>
             </div>
@@ -752,7 +952,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
     const [mortgagePending, setMortgagePending] = useState(null); // { prop, space }
     const [drawnCard, setDrawnCard] = useState(null); // { type, text, amount? }
     const [liquidateOpen, setLiquidateOpen] = useState(false);
-    const [showLog, setShowLog] = useState(false);
+    const [logExpanded, setLogExpanded] = useState(false);
     const [buildPending, setBuildPending] = useState(null); // { prop, space, buildType }
     const [resignOpen, setResignOpen] = useState(false);
 
@@ -839,7 +1039,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                 </div>
             )}
 
-            <div className={`glayout${showLog ? ' show-log' : ''}`}>
+            <div className="glayout">
                 {/* LEFT: Players + Info + Trade */}
                 <div className="gsl">
                     <div className="slabel">Players</div>
@@ -855,9 +1055,16 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                 {player.name[0]}
                             </div>
                             <div style={{flex: 1, minWidth: 0}}>
-                                <div style={{fontWeight: 600, fontSize: 11, display: 'flex', alignItems: 'center', gap: 4}}>
+                                <div style={{
+                                    fontWeight: 600,
+                                    fontSize: 11,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 4
+                                }}>
                                     {player.name}
-                                    {player.name === playerName && <span style={{fontSize: 9, color: '#bbb'}}>(you)</span>}
+                                    {player.name === playerName &&
+                                        <span style={{fontSize: 9, color: '#bbb'}}>(you)</span>}
                                     {player.isBot && <span style={{fontSize: 9, color: '#aaa'}}>🤖</span>}
                                     {player.id === currentPlayer?.id && ' 🎲'}
                                 </div>
@@ -875,7 +1082,12 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                             ['Current', currentPlayer?.name || '—'],
                             ['Active', players.filter(p => !p.isBankrupt).length],
                         ].map(([label, value]) => (
-                            <div key={String(label)} style={{display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 5}}>
+                            <div key={String(label)} style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                fontSize: 11,
+                                marginBottom: 5
+                            }}>
                                 <span style={{color: 'rgba(255,255,255,0.45)'}}>{label}</span>
                                 <strong style={{color: 'var(--gold)'}}>{value}</strong>
                             </div>
@@ -889,7 +1101,18 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                             <button key={player.id} className="btn btn-ghost btn-sm btn-full"
                                     style={{justifyContent: 'flex-start', gap: 7, marginBottom: 5}}
                                     onClick={() => setTradingWith(player)}>
-                                <div style={{width: 17, height: 17, borderRadius: '50%', background: COLORS[idx % COLORS.length], color: '#fff', fontSize: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700}}>
+                                <div style={{
+                                    width: 17,
+                                    height: 17,
+                                    borderRadius: '50%',
+                                    background: COLORS[idx % COLORS.length],
+                                    color: '#fff',
+                                    fontSize: 8,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontWeight: 700
+                                }}>
                                     {player.name[0]}
                                 </div>
                                 {player.name}
@@ -898,6 +1121,35 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                     })}
                     <div className="div"/>
                     <button className="btn btn-ghost btn-sm btn-full" onClick={onLeave}>← Leave Game</button>
+
+                    {/* Event Log — collapsible inline */}
+                    <div style={{marginTop: 4}}>
+                        <button
+                            className="btn btn-ghost btn-sm btn-full"
+                            style={{justifyContent: 'space-between', color: 'rgba(255,255,255,0.5)'}}
+                            onClick={() => setLogExpanded(v => !v)}
+                        >
+                            <span>📋 Event Log</span>
+                            <span style={{fontSize: 10}}>{logExpanded ? '▲' : '▼'}</span>
+                        </button>
+                        {logExpanded && (
+                            <div style={{
+                                marginTop: 6,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 4,
+                                maxHeight: 220,
+                                overflowY: 'auto'
+                            }}>
+                                {[...eventLog].reverse().map((entry, i) => (
+                                    <div key={i} className="eitem">{entry}</div>
+                                ))}
+                                {eventLog.length === 0 && (
+                                    <div className="eitem" style={{color: '#ccc'}}>No events yet.</div>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {/* CENTER: Board with inline action panel */}
@@ -916,7 +1168,8 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                     visibility: (isMyTurn && !paused && me?.isInJail) ? 'visible' : 'hidden',
                                     pointerEvents: (isMyTurn && !paused && me?.isInJail) ? 'auto' : 'none',
                                 }}>
-                                    <button className="btn btn-red btn-board btn-full" onClick={() => setJailModalOpen(true)}>
+                                    <button className="btn btn-red btn-board btn-full"
+                                            onClick={() => setJailModalOpen(true)}>
                                         ⛓ Handle Jail
                                     </button>
                                 </div>
@@ -957,13 +1210,15 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                         <>
                                             📍 <strong>{currentSpace.name.replace('\n', ' ')}</strong>
                                             {canBuy && <span style={{color: 'var(--green)'}}> · available</span>}
-                                            {isOwned && !isMine && <span style={{color: 'var(--red)'}}> · pay rent</span>}
+                                            {isOwned && !isMine &&
+                                                <span style={{color: 'var(--red)'}}> · pay rent</span>}
                                             {isMine && <span style={{color: '#aaa'}}> · yours</span>}
                                         </>
                                     ) : !isMyTurn && gameState?.status === 'InProgress' ? (
                                         <>
                                             <div className="spin" style={{width: 10, height: 10, flexShrink: 0}}/>
-                                            <span style={{color: '#aaa'}}>Waiting for <strong>{currentPlayer?.name}</strong>…</span>
+                                            <span
+                                                style={{color: '#aaa'}}>Waiting for <strong>{currentPlayer?.name}</strong>…</span>
                                         </>
                                     ) : (
                                         <span style={{visibility: 'hidden'}}>—</span>
@@ -993,11 +1248,6 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
 
                 {/* PROPERTIES: sits between board and event log */}
                 <div className="gsr">
-                    {/* Log toggle tab on right edge */}
-                    <button className="log-toggle" title={showLog ? 'Hide Event Log' : 'Show Event Log'}
-                            onClick={() => setShowLog(v => !v)}>
-                        {showLog ? '›' : '‹'}
-                    </button>
                     <div className="slabel">Your Properties ({myProperties.length})</div>
                     {myProperties.length === 0 && (
                         <div style={{fontSize: 11, color: '#ccc'}}>No properties yet.</div>
@@ -1005,9 +1255,26 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                     {myPropertyGroups.map(({color, items}) => (
                         <div key={color}>
                             {color !== '__other' && (
-                                <div style={{display: 'flex', alignItems: 'center', gap: 5, marginTop: 6, marginBottom: 3}}>
-                                    <div style={{width: 8, height: 8, borderRadius: 2, background: BCOLORS[color] || '#ccc', flexShrink: 0}}/>
-                                    <span style={{fontSize: 10, fontWeight: 700, color: '#888', textTransform: 'capitalize'}}>{color}</span>
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                    marginTop: 6,
+                                    marginBottom: 3
+                                }}>
+                                    <div style={{
+                                        width: 8,
+                                        height: 8,
+                                        borderRadius: 2,
+                                        background: BCOLORS[color] || '#ccc',
+                                        flexShrink: 0
+                                    }}/>
+                                    <span style={{
+                                        fontSize: 10,
+                                        fontWeight: 700,
+                                        color: '#888',
+                                        textTransform: 'capitalize'
+                                    }}>{color}</span>
                                 </div>
                             )}
                             {items.map(prop => {
@@ -1017,10 +1284,12 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                     <div key={prop.id} className="prop-row">
                                         <div style={{display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5}}>
                                             {space?.color && (
-                                                <div className="prop-dot" style={{background: BCOLORS[space.color] || '#ccc'}}/>
+                                                <div className="prop-dot"
+                                                     style={{background: BCOLORS[space.color] || '#ccc'}}/>
                                             )}
                                             <span style={{fontSize: 11, fontWeight: 600, flex: 1}}>{prop.name}</span>
-                                            {prop.isMortgaged && <span className="badge bg-red" style={{fontSize: 9}}>Mort.</span>}
+                                            {prop.isMortgaged &&
+                                                <span className="badge bg-red" style={{fontSize: 9}}>Mort.</span>}
                                         </div>
                                         <div style={{fontSize: 10, color: '#aaa', marginBottom: 6}}>
                                             {prop.hasHotel ? '🏨 Hotel' : prop.houseCount > 0 ? `🏠 ${prop.houseCount} house${prop.houseCount !== 1 ? 's' : ''}` : 'No buildings'}
@@ -1029,18 +1298,29 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                             <div style={{display: 'flex', gap: 5, flexWrap: 'wrap'}}>
                                                 {space?.type === 'Street' && !prop.isMortgaged && prop.houseCount < 4 && !prop.hasHotel && (
                                                     <button className="btn btn-sm btn-ghost" style={{fontSize: 10}}
-                                                            onClick={() => setBuildPending({prop, space, buildType: 'house'})}>
+                                                            onClick={() => setBuildPending({
+                                                                prop,
+                                                                space,
+                                                                buildType: 'house'
+                                                            })}>
                                                         +🏠{houseCost ? ` $${houseCost}` : ''}
                                                     </button>
                                                 )}
                                                 {space?.type === 'Street' && !prop.isMortgaged && prop.houseCount === 4 && !prop.hasHotel && (
                                                     <button className="btn btn-sm btn-ghost" style={{fontSize: 10}}
-                                                            onClick={() => setBuildPending({prop, space, buildType: 'hotel'})}>
+                                                            onClick={() => setBuildPending({
+                                                                prop,
+                                                                space,
+                                                                buildType: 'hotel'
+                                                            })}>
                                                         +🏨{houseCost ? ` $${houseCost}` : ''}
                                                     </button>
                                                 )}
                                                 <button className="btn btn-sm btn-ghost"
-                                                        style={{fontSize: 10, color: prop.isMortgaged ? 'var(--green)' : 'var(--red)'}}
+                                                        style={{
+                                                            fontSize: 10,
+                                                            color: prop.isMortgaged ? 'var(--green)' : 'var(--red)'
+                                                        }}
                                                         onClick={() => setMortgagePending({prop, space})}>
                                                     {prop.isMortgaged ? 'Unmortgage' : 'Mortgage'}
                                                 </button>
@@ -1051,28 +1331,20 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                             })}
                         </div>
                     ))}
-                    {myProperties.some(p => p.houseCount > 0 || p.hasHotel) && (
-                        <button className="btn btn-ghost btn-sm btn-full" style={{color: 'var(--gold)', marginBottom: 6}}
-                                onClick={() => setLiquidateOpen(true)}>
-                            💰 Liquidate Buildings
-                        </button>
-                    )}
+                    <button
+                        className="btn btn-ghost btn-sm btn-full"
+                        style={{
+                            color: myProperties.some(p => p.houseCount > 0 || p.hasHotel) ? 'var(--gold)' : 'rgba(255,255,255,0.2)',
+                            marginBottom: 6
+                        }}
+                        disabled={!myProperties.some(p => p.houseCount > 0 || p.hasHotel)}
+                        onClick={() => setLiquidateOpen(true)}
+                    >
+                        💰 Liquidate Buildings
+                    </button>
                 </div>
 
-                {/* EVENT LOG: right edge, shown when toggled */}
-                {showLog && (
-                    <div className="glog">
-                        <div className="slabel" style={{marginBottom: 4}}>Event Log</div>
-                        <div className="elog" style={{flex: 1, maxHeight: 'none', overflow: 'visible'}}>
-                            {[...eventLog].reverse().map((entry, i) => (
-                                <div key={i} className="eitem">{entry}</div>
-                            ))}
-                            {eventLog.length === 0 && (
-                                <div className="eitem" style={{color: '#ccc'}}>No events yet.</div>
-                            )}
-                        </div>
-                    </div>
-                )}
+
             </div>
 
             {liquidateOpen && (
@@ -1085,10 +1357,11 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                 />
             )}
             {drawnCard && (
-                <ChestCardPopup card={drawnCard} onDismiss={() => setDrawnCard(null)}/>
+                <CardDrawnModal card={drawnCard} onDismiss={() => setDrawnCard(null)}/>
             )}
             {incomingTrade && (
-                <IncomingTradeModal offer={incomingTrade} me={me} gameId={gameId} onDone={() => setIncomingTrade(null)}/>
+                <IncomingTradeModal offer={incomingTrade} me={me} gameId={gameId} board={boardSpaces}
+                                    onDone={() => setIncomingTrade(null)}/>
             )}
             {jailModalOpen && me && (
                 <JailModal

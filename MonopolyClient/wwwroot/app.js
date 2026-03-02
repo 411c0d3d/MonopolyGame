@@ -49,7 +49,7 @@ function App() {
         if (gameState?.status === 'InProgress' && page === 'lobby') {
             setPage('game');
         }
-    }, [gameState?.status]);
+    }, [gameState?.status, page]);
 
     const handleCreateAndJoin = (gid, name, botKey) => {
         setGameId(gid);
