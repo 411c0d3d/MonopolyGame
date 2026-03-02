@@ -716,6 +716,7 @@ public class GameEngine
             {
                 otherPlayer.DeductCash(amount);
                 collector.AddCash(amount);
+                _state.LogAction($"{otherPlayer.Name} gave ${amount} to {collector.Name}.");
             }
             else
             {
@@ -724,7 +725,7 @@ public class GameEngine
             }
         }
 
-        _state.LogAction($"{collector.Name} collected from each other player.");
+        _state.LogAction($"{collector.Name} collected 10$ from each player.");
     }
 
     /// <summary>

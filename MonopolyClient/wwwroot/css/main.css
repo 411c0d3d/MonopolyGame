@@ -1238,6 +1238,107 @@ h1, h2, h3 {
     color: var(--gold);
 }
 
+/* ─── Modal Shared Structure ─────────────────────────────────────────────── */
+
+/* Colored header band at top of property modals — set background inline */
+.modal-color-bar {
+    height: 36px;
+    border-radius: 8px 8px 0 0;
+    margin-bottom: 14px;
+}
+
+/* Cream detail panel used in Mortgage, Build, Buy modals */
+.modal-detail-panel {
+    background: var(--cream);
+    padding: 14px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+/* Standard label/value row inside a detail panel */
+.modal-detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+}
+
+/* Total/summary row with top divider */
+.modal-detail-row-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 15px;
+    border-top: 1px solid var(--border);
+    padding-top: 9px;
+}
+
+/* Red insufficient-funds notice */
+.modal-error-banner {
+    background: rgba(229, 57, 53, 0.12);
+    color: var(--red);
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 12px;
+    text-align: center;
+    font-weight: 600;
+}
+
+/* Confirm / Cancel button pair */
+.modal-btn-row {
+    display: flex;
+    gap: 9px;
+}
+
+/* Thin vertical color swatch beside property names — set height & background inline */
+.prop-swatch {
+    width: 8px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+/* ─── Color Group Headers (trade / properties panels) ────────────────────── */
+
+.color-group-header {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 8px;
+    margin-bottom: 3px;
+}
+
+.color-group-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.color-group-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #888;
+    text-transform: capitalize;
+}
+
+/* ─── Winner Overlay ─────────────────────────────────────────────────────── */
+
+.winner-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.68);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 600;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
 /* ─── Info Box (left sidebar) ────────────────────────────────────────────── */
 
 .info-box {
