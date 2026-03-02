@@ -238,34 +238,40 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                         rolling={rolling}
                         actionPanel={
                             <div className="board-actions">
-                                {/* Slot 1: jail button — holds its height always */}
-                                <div style={{
-                                    width: '100%',
-                                    visibility: (isMyTurn && !paused && me?.isInJail) ? 'visible' : 'hidden',
-                                    pointerEvents: (isMyTurn && !paused && me?.isInJail) ? 'auto' : 'none',
-                                }}>
-                                    <button className="btn btn-red btn-board btn-full"
+                                {/* Slots 1+2: shared grid — jail spans all 3 cols so its width exactly matches the action row */}
+                                <div className="action-grid">
+                                    <button className="btn btn-red btn-board"
+                                            style={{
+                                                gridColumn: '1 / -1',
+                                                visibility: (isMyTurn && !paused && me?.isInJail) ? 'visible' : 'hidden',
+                                                pointerEvents: (isMyTurn && !paused && me?.isInJail) ? 'auto' : 'none',
+                                            }}
                                             onClick={() => setJailModalOpen(true)}>
                                         ⛓ Handle Jail
                                     </button>
-                                </div>
-
-                                {/* Slot 2: main roll/buy/end row — always in flow */}
-                                <div className="action-row" style={{
-                                    visibility: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'visible' : 'hidden',
-                                    pointerEvents: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'auto' : 'none',
-                                }}>
                                     <button className="btn btn-gold btn-board" onClick={handleRoll}
-                                            disabled={me?.hasRolledDice || rolling || me?.isInJail}>
+                                            disabled={me?.hasRolledDice || rolling || me?.isInJail}
+                                            style={{
+                                                visibility: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'visible' : 'hidden',
+                                                pointerEvents: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'auto' : 'none',
+                                            }}>
                                         {rolling ? '…' : '🎲 Roll'}
                                     </button>
                                     <button className="btn btn-green btn-board" onClick={() => setBuyModalOpen(true)}
-                                            disabled={!canBuy}>
+                                            disabled={!canBuy}
+                                            style={{
+                                                visibility: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'visible' : 'hidden',
+                                                pointerEvents: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'auto' : 'none',
+                                            }}>
                                         🏠 {canBuy ? `$${boardSpace?.purchasePrice || '?'}` : 'Buy'}
                                     </button>
                                     <button className="btn btn-ghost btn-board"
                                             onClick={() => hubCall('EndTurn', gameId)}
-                                            disabled={!me?.hasRolledDice}>
+                                            disabled={!me?.hasRolledDice}
+                                            style={{
+                                                visibility: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'visible' : 'hidden',
+                                                pointerEvents: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'auto' : 'none',
+                                            }}>
                                         ⏭ End
                                     </button>
                                 </div>
@@ -359,12 +365,18 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                     const houseCost = prop.houseCost || space?.houseCost;
                                     return (
                                         <div key={prop.id} className="prop-row">
-                                            <div style={{display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5}}>
+                                            <div style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: 6,
+                                                marginBottom: 5
+                                            }}>
                                                 {space?.color && (
                                                     <div className="prop-dot"
                                                          style={{background: BCOLORS[space.color] || '#ccc'}}/>
                                                 )}
-                                                <span style={{fontSize: 11, fontWeight: 600, flex: 1}}>{prop.name}</span>
+                                                <span
+                                                    style={{fontSize: 11, fontWeight: 600, flex: 1}}>{prop.name}</span>
                                                 {prop.isMortgaged &&
                                                     <span className="badge bg-red" style={{fontSize: 9}}>Mort.</span>}
                                             </div>

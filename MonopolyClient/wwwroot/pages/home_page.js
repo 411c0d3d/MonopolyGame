@@ -95,7 +95,7 @@ function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
                             <label className="il">Your Name</label>
                             <input
                                 className="input"
-                                placeholder="e.g. Alice"
+                                placeholder="e.g. Bob"
                                 value={playerName}
                                 onChange={e => setPlayerName(e.target.value)}
                                 maxLength={20}

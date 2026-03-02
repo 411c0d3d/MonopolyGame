@@ -23,6 +23,11 @@ function Header({page, gameId, me, isAdmin, onAdmin, onLeave}) {
                 {page === 'game' && (
                     <span style={{color: 'var(--green)', fontWeight: 600, fontSize: 12}}>● Live</span>
                 )}
+                {page === 'admin' && (
+                    <span style={{fontSize: 12, color: '#aaa', letterSpacing: 1, textTransform: 'uppercase'}}>
+                        ⚙ Admin Panel
+                    </span>
+                )}
                 {me && <div className="hbadge">{me}</div>}
                 {isAdmin && page !== 'admin' && (
                     <button className="btn btn-ghost btn-sm" onClick={onAdmin}>⚙ Admin</button>

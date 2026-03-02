@@ -321,13 +321,19 @@ h1, h2, h3 {
     width: 100%;
 }
 
-/* Action grid — compact, centered, natural button widths */
-.action-grid,
+/* Generic flex action row */
 .agrid {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
     gap: 7px;
+}
+
+/* Board action grid — jail button spans all 3 cols to match action row width exactly */
+.action-grid {
+    display: inline-grid;
+    grid-template-columns: repeat(3, auto);
+    gap: 5px;
 }
 
 /* ─── Inputs ─────────────────────────────────────────────────────────────── */
@@ -1179,12 +1185,6 @@ h1, h2, h3 {
     min-height: clamp(100px, 19cqw, 152px);
 }
 
-.board-actions .action-row {
-    display: flex;
-    gap: 5px;
-    justify-content: center;
-    flex-wrap: wrap;
-}
 
 /* Responsive */
 @media (max-width: 1000px) {
