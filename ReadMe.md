@@ -30,7 +30,7 @@ A full-featured multiplayer Monopoly game built with ASP.NET Core 10, SignalR, a
 | Server | ASP.NET Core 10 |
 | Real-time transport | SignalR |
 | Client | React over Razor (no bundler — plain script tags via index.html) |
-| State | In-memory (`Dictionary<string, GameState>`) with JSON file persistence for recovery |
+| State | Both decoupled storage repository source of truth and In-memory (`Dictionary<string, GameState>`) with JSON file persistence for recovery |
 | Serialisation | Strongly-typed DTOs, System.Text.Json |
 
 ---
@@ -45,7 +45,7 @@ cd MonopolyGame
 dotnet run --project MonopolyServer
 ```
 
-Open `http://localhost:5000` in your browser. Create a room, share the URL with friends, and start the game when everyone has joined.
+Local testing: Open `http://localhost:5299` in your browser. Create a room, add up to 7 bots and play against them.
 
 ---
 
@@ -167,6 +167,9 @@ Player clicks Roll
               → Hub broadcasts GameStateUpdated + DiceRolled to all players
                   → React re-renders board, tokens, and cash
                   → Dice animation plays and settles on real values
+                  → The Player takes some actions from the client via signalR
+                  → Player Action is sent via hub service and received by GameHub on the server
+                  → The game engine alters GameState and triggers the GameHub to update the client via SignalR 
 ```
 
 The server is always the source of truth. The client never modifies game state locally — it waits for `GameStateUpdated` before re-rendering.
