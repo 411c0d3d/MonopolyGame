@@ -169,7 +169,7 @@ Player clicks Roll
                   → Dice animation plays and settles on real values
                   → The Player takes some actions from the client via signalR
                   → Player Action is sent via hub service and received by GameHub on the server
-                  → The game engine alters GameState and triggers the GameHub to update the client via SignalR 
+                  → The GameEngine produces new GameState and triggers the GameHub to update the Clients via SignalR 
 ```
 
 The server is always the source of truth. The client never modifies game state locally — it waits for `GameStateUpdated` before re-rendering.
