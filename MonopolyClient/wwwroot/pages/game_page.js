@@ -379,7 +379,7 @@ function BuyPropertyModal({space, boardSpace, me, myProperties, gameId, onClose}
                                 return (
                                     <div key={prop.id} style={{
                                         display: 'flex', alignItems: 'center', gap: 8,
-                                        padding: '6px 10px', background: '#fff',
+                                        padding: '6px 10px', background: 'rgba(255,255,255,0.06)',
                                         border: '1px solid var(--border)', borderRadius: 6, fontSize: 12
                                     }}>
                                         {propSpace?.color && (
@@ -403,7 +403,7 @@ function BuyPropertyModal({space, boardSpace, me, myProperties, gameId, onClose}
 
                 {!canAfford && (
                     <div style={{
-                        background: '#fde8e8', color: 'var(--red)', padding: 10,
+                        background: 'rgba(229,57,53,0.12)', color: 'var(--red)', padding: 10,
                         borderRadius: 8, fontSize: 13, marginBottom: 16, textAlign: 'center', fontWeight: 600
                     }}>
                         ⚠ Insufficient funds!

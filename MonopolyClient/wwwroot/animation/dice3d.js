@@ -179,7 +179,7 @@ function DiceTray({ dice = [], rolling = false }) {
             {/* Doubles badge row — reserved height prevents jitter */}
             <div className="board-dice-doubles-slot">
                 {isDoubles && (
-                    <span className="doubles-badge">🎲 Doubles!</span>
+                    <span className="doubles-badge">🎲 Double!</span>
                 )}
             </div>
         </div>
