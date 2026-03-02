@@ -62,7 +62,11 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
         if (bp?.ownerId) {
             const idx = activePlayers.findIndex(p => p.id === bp.ownerId);
             if (idx >= 0) {
-                return {background: COLORS[idx % COLORS.length] + '22'};
+                const color = COLORS[idx % COLORS.length];
+                return {
+                    boxShadow: `inset 0 0 0 2px ${color}cc`,
+                    background: color + '14',
+                };
             }
         }
         return {};
@@ -416,7 +420,7 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
                     if (el) {
                         cellRefs.current[0] = el;
                     }
-                }} className="bcorner" style={{gridColumn: 11, gridRow: 11, background: '#e8f5e9'}}>
+                }} className="bcorner" style={{gridColumn: 11, gridRow: 11}}>
                     <span className="corner-icon">🏁</span><span className="corner-label">GO</span>
                 </div>
                 <div ref={el => {
@@ -512,33 +516,8 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
                         </div>
                     </div>
 
-                    {/* Dice — sum right, doubles below */}
-                    {(dice[0] && dice[1])
-                        ? <DiceTray dice={dice} rolling={rolling}/>
-                        : (
-                            <div className="darea" style={{opacity: 0.3}}>
-                                <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-                                    <div className="die">
-                                        {[false, false, false, false, true, false, false, false, false].map((on, i) => (
-                                            <div key={i} className={`pip${on ? '' : ' off'}`}/>
-                                        ))}
-                                    </div>
-                                    <div className="die">
-                                        {[false, false, false, false, true, false, false, false, false].map((on, i) => (
-                                            <div key={i} className={`pip${on ? '' : ' off'}`}/>
-                                        ))}
-                                    </div>
-                                    <div style={{
-                                        fontSize: 'clamp(10px, 2cqw, 16px)',
-                                        color: '#888',
-                                        fontWeight: 700,
-                                        minWidth: '2em'
-                                    }}>&nbsp;&nbsp;&nbsp;</div>
-                                </div>
-                                <div className="board-dice-doubles-slot">&nbsp;</div>
-                            </div>
-                        )
-                    }
+                    {/* Dice — 3D tray handles idle / rolling / settled internally */}
+                    <DiceTray dice={dice} rolling={rolling}/>
 
                     {/* Action panel */}
                     {actionPanel}

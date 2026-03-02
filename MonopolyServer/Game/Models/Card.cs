@@ -67,13 +67,13 @@ public class Card
     /// Initialize a new Card instance with required identity and deck information.
     /// </summary>
     [JsonConstructor]
-    public Card(string id, string title, string description, CardType type, CardDeck deck)
+    public Card(string id, string title, string description, CardType type, CardDeck deckType)
     {
         Id = id;
         Title = title;
         Description = description;
         Type = type;
-        DeckType = deck;
+        DeckType = deckType;
         IsKeptByPlayer = false;
     }
 

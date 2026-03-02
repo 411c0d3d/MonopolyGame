@@ -1,0 +1,118 @@
+/* dice3d.css — 3D CSS die styles.
+   Load after main.css.  Depends on --gold from :root in main.css.
+   All sizing is driven by the --die-s / --die-h custom properties so the
+   dice scale correctly inside the board's container-query context.          */
+
+/* ─── Scene (perspective root) ───────────────────────────────────────────── */
+
+.die3d-scene {
+    --die-s: clamp(28px, 5.5cqw, 44px);
+    --die-h: calc(var(--die-s) / 2);
+    width:       var(--die-s);
+    height:      var(--die-s);
+    /* Perspective on the scene; cube inherits it via preserve-3d */
+    perspective: calc(var(--die-s) * 5.5);
+    position:    relative;
+    flex-shrink: 0;
+}
+
+/* ─── Landing bounce (applied to scene, not cube, so shadow follows) ──────── */
+
+.die3d-bouncing {
+    animation: die3d-bounce 0.34s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes die3d-bounce {
+    0%   { transform: scale(1);    }
+    32%  { transform: scale(1.08); }
+    64%  { transform: scale(0.96); }
+    100% { transform: scale(1);    }
+}
+
+/* ─── Cube ────────────────────────────────────────────────────────────────── */
+
+.die3d-cube {
+    width:    var(--die-s);
+    height:   var(--die-s);
+    position: relative;
+    transform-style: preserve-3d;
+    will-change: transform;
+}
+
+/* ─── Faces ───────────────────────────────────────────────────────────────── */
+
+.die3d-face {
+    position:   absolute;
+    width:      var(--die-s);
+    height:     var(--die-s);
+    border-radius: calc(var(--die-s) * 0.14);
+    backface-visibility:         hidden;
+    -webkit-backface-visibility: hidden;
+    overflow: hidden;
+    display:         flex;
+    align-items:     center;
+    justify-content: center;
+
+    /* Ivory white face with subtle edge lighting */
+    background: #f8f7f2;
+    border: 1.5px solid rgba(190, 190, 215, 0.55);
+    box-shadow:
+            inset 0  1px 3px rgba(255, 255, 255, 0.95),
+            inset 0 -1px 3px rgba(0,   0,   0,   0.07),
+            0  2px 5px rgba(0,   0,  50,   0.2);
+}
+
+/* ─── Face transforms — positions each face on the correct side of the cube ─ */
+
+.die3d-face--front  { transform: translateZ(var(--die-h)); }
+.die3d-face--back   { transform: rotateY(180deg)  translateZ(var(--die-h)); }
+.die3d-face--right  { transform: rotateY(90deg)   translateZ(var(--die-h)); }
+.die3d-face--left   { transform: rotateY(-90deg)  translateZ(var(--die-h)); }
+.die3d-face--top    { transform: rotateX(-90deg)  translateZ(var(--die-h)); }
+.die3d-face--bottom { transform: rotateX(90deg)   translateZ(var(--die-h)); }
+
+/* ─── Pips ────────────────────────────────────────────────────────────────── */
+
+/* Relative container — pip positions are percentages of this */
+.die3d-pips {
+    position: relative;
+    width:  76%;
+    height: 76%;
+}
+
+/* Individual pip dot; left/top set inline from PIPS constant */
+.die3d-pip {
+    position:      absolute;
+    width:         22%;
+    aspect-ratio:  1;
+    background:    #1a1040;
+    border-radius: 50%;
+    transform:     translate(-50%, -50%);
+    box-shadow:    inset 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* ─── Ground shadow ───────────────────────────────────────────────────────── */
+
+.die3d-shadow {
+    position:  absolute;
+    bottom:    -4px;
+    left:      50%;
+    transform: translateX(-50%);
+    width:      80%;
+    height:     6px;
+    background: radial-gradient(ellipse, rgba(0, 0, 50, 0.5) 0%, transparent 68%);
+    filter:     blur(2px);
+    pointer-events: none;
+}
+
+/* Shadow pulses with the bounce animation */
+.die3d-bouncing .die3d-shadow {
+    animation: die3d-shadow-pulse 0.34s ease;
+}
+
+@keyframes die3d-shadow-pulse {
+    0%   { transform: translateX(-50%) scaleX(1);    opacity: 0.85; }
+    32%  { transform: translateX(-50%) scaleX(0.72); opacity: 0.4;  }
+    64%  { transform: translateX(-50%) scaleX(1.18); opacity: 1;    }
+    100% { transform: translateX(-50%) scaleX(1);    opacity: 0.85; }
+}

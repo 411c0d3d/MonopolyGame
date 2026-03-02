@@ -28,10 +28,19 @@ function TurnTimer({startedAt, limitSeconds = 120}) {
     const mins = String(Math.floor(remaining / 60)).padStart(2, '0');
     const secs = String(remaining % 60).padStart(2, '0');
     const ratio = remaining / limitSeconds;
-    const color = ratio > 0.5 ? 'var(--green)' : ratio > 0.25 ? '#f5a623' : 'var(--red)';
+    const color = ratio > 0.5 ? 'var(--green-light)' : ratio > 0.25 ? '#f5a623' : 'var(--red)';
 
     return (
-        <span style={{fontVariantNumeric: 'tabular-nums', color, fontWeight: 700, fontSize: 12}}>
+        <span style={{
+            fontVariantNumeric: 'tabular-nums',
+            background: color,
+            color: '#0b1530',
+            fontWeight: 800,
+            fontSize: 12,
+            padding: '2px 6px',
+            borderRadius: '4px',
+            display: 'inline-block'
+        }}>
             {mins}:{secs}
         </span>
     );

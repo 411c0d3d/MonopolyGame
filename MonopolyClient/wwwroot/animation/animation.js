@@ -7,8 +7,6 @@
 
 const BOARD_SIZE = 40;
 const HOP_INTERVAL_MS = 180;   // ms per cell hop
-const DICE_SHUFFLE_MS = 80;    // ms between shuffle frames
-const DICE_DURATION_MS = 700;  // total dice roll animation duration
 const CARD_POPUP_MS = 5000;    // ms before card popup auto-dismisses
 
 /** Pip grid positions per die face value (row, col in a 3×3 grid). */
@@ -105,112 +103,6 @@ function usePlayerHop(players) {
     }, []);
 
     return animPositions;
-}
-
-/**
- * Manages dice shuffle animation state. Returns [dice, rolling, triggerRoll, settleDice].
- * The caller must invoke the actual hub RollDice call separately.
- * Call settleDice(d1, d2) when the server confirms the real values.
- * @returns {[number[], boolean, Function, Function]}
- */
-function useDiceRoll() {
-    const [dice, setDice] = useState([null, null]);
-    const [rolling, setRolling] = useState(false);
-    const intervalRef = useRef(null);
-    const timeoutRef = useRef(null);
-    const pendingRef = useRef(null);  // actual server dice queued during animation
-    const rollingRef = useRef(false); // mirrors rolling state; avoids stale closure reads
-
-    const triggerRoll = () => {
-        rollingRef.current = true;
-        setRolling(true);
-        pendingRef.current = null;
-
-        intervalRef.current = setInterval(() => {
-            setDice([
-                Math.ceil(Math.random() * 6),
-                Math.ceil(Math.random() * 6),
-            ]);
-        }, DICE_SHUFFLE_MS);
-
-        timeoutRef.current = setTimeout(() => {
-            clearInterval(intervalRef.current);
-            rollingRef.current = false;
-            setRolling(false);
-            // Snap to real server values if they arrived while animating
-            if (pendingRef.current) {
-                setDice(pendingRef.current);
-                pendingRef.current = null;
-            }
-        }, DICE_DURATION_MS);
-    };
-
-    /** Snaps dice to actual server values; queues if animation is still running. */
-    const settleDice = (values) => {
-        if (rollingRef.current) {
-            pendingRef.current = values;
-        } else {
-            setDice(values);
-        }
-    };
-
-    useEffect(() => {
-        return () => {
-            clearInterval(intervalRef.current);
-            clearTimeout(timeoutRef.current);
-        };
-    }, []);
-
-    return [dice, rolling, triggerRoll, settleDice];
-}
-
-// ─── Components ───────────────────────────────────────────────────────────────
-
-/**
- * Single die face with animated pip shuffle during roll state.
- * @param {{ value: number|null, rolling: boolean }} props
- */
-function Die({value, rolling}) {
-    const pips = (value && DIE_PIPS[value]) ? DIE_PIPS[value] : [];
-    const grid = Array(9).fill(false);
-    pips.forEach(([row, col]) => {
-        grid[row * 3 + col] = true;
-    });
-
-    return (
-        <div className={`die${rolling ? ' roll' : ''}`} aria-label={value ? `Die showing ${value}` : 'Die'}>
-            {grid.map((active, i) => (
-                <div key={i} className={`pip${active ? '' : ' off'}`}/>
-            ))}
-        </div>
-    );
-}
-
-/**
- * Full dice tray: dice row with sum on the right, doubles label in reserved slot below.
- * @param {{ dice: number[], rolling: boolean }} props
- */
-function DiceTray({dice, rolling}) {
-    const [d1, d2] = dice;
-    const hasResult = d1 && d2;
-    const isDoubles = hasResult && d1 === d2;
-
-    return (
-        <div className="dice-area">
-            {/* Dice + sum on one row */}
-            <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-                <Die value={d1} rolling={rolling}/>
-                <Die value={d2} rolling={rolling}/>
-                <div style={{fontSize: 'clamp(10px, 2cqw, 16px)', color: '#888', fontWeight: 700, minWidth: '2em', textAlign: 'left'}}>
-                    {hasResult ? `= ${d1 + d2}` : '\u00A0\u00A0\u00A0'}
-                </div>
-            </div>
-            {/* Reserved slot — always present, shows "Doubles!" or invisible spacer */}
-            <div className="board-dice-doubles-slot">
-                {isDoubles ? <span className="doubles-badge">Doubles!</span> : '\u00A0'}
-            </div>
-        </div>
-    );
 }
 
 /**

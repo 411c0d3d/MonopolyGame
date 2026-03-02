@@ -5,34 +5,47 @@
 // Die, DiceTray, ChestCardPopup, usePlayerHop, useDiceRoll are provided by animations.js.
 
 /**
+ * Compact balance strip shown at the top of all action modals.
+ * @param {{ cash: number, label?: string }} props
+ */
+function ModalBalanceBar({cash, label = 'Your Balance'}) {
+    return (
+        <div className="modal-balance-bar">
+            <span className="modal-balance-label">{label}</span>
+            <strong className="modal-balance-value">${cash?.toLocaleString() ?? '—'}</strong>
+        </div>
+    );
+}
+
+/**
  * Modal for resolving a jail situation on the player's turn.
  * @param {{ player: any, onClose: function, onAct: function }} props
  */
 function JailModal({player, onClose, onAct}) {
+    const canAffordFine = player.cash >= 50;
     return (
         <div className="overlay">
             <div className="mbox">
                 <h3 style={{marginBottom: 7}}>⛓ You're in Jail</h3>
-                <p style={{color: '#999', fontSize: 13, marginBottom: 18}}>Choose how to proceed:</p>
+                <ModalBalanceBar cash={player.cash}/>
+                <p style={{color: '#999', fontSize: 13, marginBottom: 14}}>Choose how to proceed:</p>
                 <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                     {player.keptCardCount > 0 && (
-                        <button className="btn btn-gold btn-full" onClick={() => {
-                            onAct(true, false);
-                            onClose();
-                        }}>
+                        <button className="btn btn-gold btn-full"
+                                onClick={() => { onAct(true, false); onClose(); }}>
                             🃏 Use Get Out of Jail Free Card
                         </button>
                     )}
-                    <button className="btn btn-ghost btn-full" onClick={() => {
-                        onAct(false, true);
-                        onClose();
-                    }}>
-                        💵 Pay $50 Fine
+                    <button className="btn btn-ghost btn-full" disabled={!canAffordFine}
+                            onClick={() => { onAct(false, true); onClose(); }}
+                            style={{display: 'flex', justifyContent: 'space-between'}}>
+                        <span>💵 Pay $50 Fine</span>
+                        <span style={{color: canAffordFine ? 'var(--red)' : '#aaa', fontSize: 11}}>
+                            → ${(player.cash - 50).toLocaleString()} left
+                        </span>
                     </button>
-                    <button className="btn btn-ghost btn-full" onClick={() => {
-                        onAct(false, false);
-                        onClose();
-                    }}>
+                    <button className="btn btn-ghost btn-full"
+                            onClick={() => { onAct(false, false); onClose(); }}>
                         🎲 Try to Roll Doubles
                     </button>
                     <button className="btn btn-sm btn-ghost btn-full" style={{color: '#aaa'}} onClick={onClose}>
@@ -46,9 +59,9 @@ function JailModal({player, onClose, onAct}) {
 
 /**
  * Modal shown when another player sends a trade proposal.
- * @param {{ offer: any, gameId: string, onDone: function }} props
+ * @param {{ offer: any, me: any, gameId: string, onDone: function }} props
  */
-function IncomingTradeModal({offer, gameId, onDone}) {
+function IncomingTradeModal({offer, me, gameId, onDone}) {
     const handleAccept = () => {
         gameHub.call('RespondToTrade', gameId, offer.id, true);
         onDone();
@@ -58,25 +71,33 @@ function IncomingTradeModal({offer, gameId, onDone}) {
         onDone();
     };
 
+    const netCash = (offer.offeredCash || 0) - (offer.requestedCash || 0);
+    const balanceAfter = me ? me.cash + netCash : null;
+
+    /** Renders a property list row with color swatch and purchase price. */
     const renderPropertyGroups = (ids) => {
         const groups = groupIdsByColor(ids);
         if (!groups.length) {
-            return <span style={{fontSize: 11, color: '#ccc'}}>Nothing</span>;
+            return <span style={{fontSize: 11, color: '#aaa'}}>Nothing</span>;
         }
         return groups.map(({color, items}) => (
             <div key={color}>
                 <ColorGroupHeader color={color}/>
                 {items.map(({pid, space}) => (
                     <div key={String(pid)} style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 5,
-                        fontSize: 12,
-                        marginBottom: 3,
-                        paddingLeft: 4
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        fontSize: 12, marginBottom: 4, paddingLeft: 2,
                     }}>
-                        🏠 <span>{space ? space.name.replace('\n', ' ') : `#${pid}`} <span
-                        style={{color: '#bbb', fontSize: 10}}>(#{pid})</span></span>
+                        {space?.color
+                            ? <div style={{width: 7, height: 14, background: BCOLORS[space.color], borderRadius: 1, flexShrink: 0}}/>
+                            : <span>🏠</span>
+                        }
+                        <span style={{flex: 1}}>{space ? space.name.replace('\n', ' ') : `#${pid}`}</span>
+                        {(space?.price || space?.purchasePrice) && (
+                            <span style={{color: 'var(--gold)', fontWeight: 700, fontSize: 11}}>
+                                ${(space.price || space.purchasePrice).toLocaleString()}
+                            </span>
+                        )}
                     </div>
                 ))}
             </div>
@@ -87,29 +108,51 @@ function IncomingTradeModal({offer, gameId, onDone}) {
         <div className="overlay">
             <div className="mbox">
                 <h3 style={{marginBottom: 5}}>Trade Proposal</h3>
-                <p style={{color: '#999', fontSize: 13, marginBottom: 16}}>
-                    <strong>{offer.fromPlayerName}</strong> wants to trade
+                <p style={{fontSize: 13, marginBottom: 10}}>
+                    <strong>{offer.fromPlayerName}</strong> wants to trade with you
                 </p>
-                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 11, marginBottom: 18}}>
+                {me && <ModalBalanceBar cash={me.cash}/>}
+                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 11, marginBottom: 12}}>
                     <div className="trade-section">
                         <div className="slabel">They Offer</div>
-                        {offer.offeredCash > 0 &&
-                            <div style={{fontSize: 13, marginBottom: 3}}>💵 ${offer.offeredCash}</div>}
+                        {offer.offeredCash > 0 && (
+                            <div style={{fontSize: 13, fontWeight: 700, color: 'var(--green)', marginBottom: 5}}>
+                                💵 +${offer.offeredCash.toLocaleString()}
+                            </div>
+                        )}
                         {renderPropertyGroups(offer.offeredPropertyIds)}
                         {!offer.offeredCash && !(offer.offeredPropertyIds || []).length && (
-                            <span style={{fontSize: 11, color: '#ccc'}}>Nothing</span>
+                            <span style={{fontSize: 11, color: '#aaa'}}>Nothing</span>
                         )}
                     </div>
                     <div className="trade-section">
                         <div className="slabel">They Want</div>
-                        {offer.requestedCash > 0 &&
-                            <div style={{fontSize: 13, marginBottom: 3}}>💵 ${offer.requestedCash}</div>}
+                        {offer.requestedCash > 0 && (
+                            <div style={{fontSize: 13, fontWeight: 700, color: 'var(--red)', marginBottom: 5}}>
+                                💵 −${offer.requestedCash.toLocaleString()}
+                            </div>
+                        )}
                         {renderPropertyGroups(offer.requestedPropertyIds)}
                         {!offer.requestedCash && !(offer.requestedPropertyIds || []).length && (
-                            <span style={{fontSize: 11, color: '#ccc'}}>Nothing</span>
+                            <span style={{fontSize: 11, color: '#aaa'}}>Nothing</span>
                         )}
                     </div>
                 </div>
+                {me && (
+                    <div style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        background: 'var(--cream)', border: '1px solid var(--border)',
+                        borderRadius: 8, padding: '7px 12px', marginBottom: 14, fontSize: 13,
+                    }}>
+                        <span style={{color: '#aaa', fontSize: 11}}>CASH AFTER DEAL</span>
+                        <strong style={{color: netCash >= 0 ? 'var(--green)' : 'var(--red)', fontSize: 15}}>
+                            ${balanceAfter.toLocaleString()}
+                            <span style={{fontSize: 10, fontWeight: 400, marginLeft: 5}}>
+                                ({netCash >= 0 ? '+' : ''}{netCash.toLocaleString()})
+                            </span>
+                        </strong>
+                    </div>
+                )}
                 <div style={{display: 'flex', gap: 9}}>
                     <button className="btn btn-green btn-full" onClick={handleAccept}>✓ Accept</button>
                     <button className="btn btn-red btn-full" onClick={handleReject}>✕ Decline</button>
@@ -121,9 +164,9 @@ function IncomingTradeModal({offer, gameId, onDone}) {
 
 /**
  * Modal for composing and sending a trade proposal to another player.
- * @param {{ target: any, myProps: any[], board: any[], gameId: string, onClose: function }} props
+ * @param {{ target: any, me: any, myProps: any[], board: any[], gameId: string, turnStartedAt: string, onClose: function }} props
  */
-function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClose}) {
+function ProposeTradeModal({target, me, myProps, board, gameId, turnStartedAt, onClose}) {
     const {toast} = useContext(Ctx);
     const [offeredCash, setOfferedCash] = useState('0');
     const [requestedCash, setRequestedCash] = useState('0');
@@ -131,6 +174,9 @@ function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClo
     const [requestedProps, setRequestedProps] = useState([]);
 
     const theirProps = (board || []).filter(b => b.ownerId === target.id);
+
+    const netCash = (parseInt(requestedCash) || 0) - (parseInt(offeredCash) || 0);
+    const balanceAfter = me ? me.cash - (parseInt(offeredCash) || 0) + (parseInt(requestedCash) || 0) : null;
 
     const toggleProp = (currentList, setter, id) => {
         setter(list => list.includes(id) ? list.filter(x => x !== id) : [...list, id]);
@@ -145,12 +191,7 @@ function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClo
             offeredCardIds: [],
             requestedCardIds: [],
         };
-        console.log('[TRADE] Sending ProposeTrade', {
-            gameId,
-            toPlayerId: target.id,
-            toPlayerName: target.name,
-            payload
-        });
+        console.log('[TRADE] Sending ProposeTrade', {gameId, toPlayerId: target.id, toPlayerName: target.name, payload});
         gameHub.call('ProposeTrade', gameId, target.id, payload)
             .then(() => {
                 console.log('[TRADE] ProposeTrade call resolved (hub accepted the invocation)');
@@ -163,9 +204,10 @@ function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClo
             });
     };
 
+    /** Renders color-grouped property checkboxes with price shown per row. */
     const renderColorGroupedCheckboxes = (props, selectedList, setter) => {
         if (!props.length) {
-            return <div style={{fontSize: 11, color: '#ccc'}}>None</div>;
+            return <div style={{fontSize: 11, color: '#aaa'}}>None</div>;
         }
         const groups = groupPropsByColor(props);
         return groups.map(({color, items}) => (
@@ -173,20 +215,26 @@ function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClo
                 <ColorGroupHeader color={color}/>
                 {items.map(prop => {
                     const spaceName = prop.space?.name?.replace('\n', ' ') || prop.name;
+                    const price = prop.purchasePrice || prop.space?.price || prop.space?.purchasePrice;
                     return (
                         <label key={prop.id} style={{
                             display: 'flex', alignItems: 'center', gap: 7,
-                            fontSize: 12, marginBottom: 5, cursor: 'pointer', paddingLeft: 4
+                            fontSize: 12, marginBottom: 5, cursor: 'pointer', paddingLeft: 2,
                         }}>
                             <input
                                 type="checkbox"
                                 checked={selectedList.includes(prop.id)}
                                 onChange={() => toggleProp(selectedList, setter, prop.id)}
                             />
-                            <span>
-                                {spaceName}
-                                <span style={{color: '#bbb', fontSize: 10, marginLeft: 3}}>(#{prop.id})</span>
-                            </span>
+                            {prop.space?.color && (
+                                <div style={{width: 7, height: 14, background: BCOLORS[prop.space.color], borderRadius: 1, flexShrink: 0}}/>
+                            )}
+                            <span style={{flex: 1}}>{spaceName}</span>
+                            {price && (
+                                <span style={{color: 'var(--gold)', fontWeight: 700, fontSize: 11, flexShrink: 0}}>
+                                    ${price.toLocaleString()}
+                                </span>
+                            )}
                         </label>
                     );
                 })}
@@ -198,10 +246,11 @@ function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClo
         <div className="overlay">
             <div className="mbox mbox-wide">
                 <h3 style={{marginBottom: 4}}>Propose Trade</h3>
-                <p style={{color: '#999', fontSize: 13, marginBottom: 18}}>
+                <p style={{color: '#999', fontSize: 13, marginBottom: 10}}>
                     Trading with <strong>{target.name}</strong>
                 </p>
-                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 15, marginBottom: 18}}>
+                {me && <ModalBalanceBar cash={me.cash}/>}
+                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 15, marginBottom: 14}}>
                     <div>
                         <div className="slabel">You Offer</div>
                         <div className="ig">
@@ -209,12 +258,7 @@ function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClo
                             <input className="input" type="number" min="0" value={offeredCash}
                                    onChange={e => setOfferedCash(e.target.value)}/>
                         </div>
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            marginBottom: 9
-                        }}>
+                        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9}}>
                             <span className="slabel" style={{marginBottom: 0}}>Your Turn</span>
                             <TurnTimer startedAt={turnStartedAt}/>
                         </div>
@@ -231,6 +275,23 @@ function ProposeTradeModal({target, myProps, board, gameId, turnStartedAt, onClo
                         {renderColorGroupedCheckboxes(theirProps, requestedProps, setRequestedProps)}
                     </div>
                 </div>
+                {me && (
+                    <div style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        background: 'var(--cream)', border: '1px solid var(--border)',
+                        borderRadius: 8, padding: '7px 12px', marginBottom: 14, fontSize: 13,
+                    }}>
+                        <span style={{color: '#aaa', fontSize: 11}}>YOUR CASH AFTER DEAL</span>
+                        <strong style={{color: balanceAfter >= 0 ? 'var(--gold)' : 'var(--red)', fontSize: 15}}>
+                            ${balanceAfter?.toLocaleString()}
+                            {netCash !== 0 && (
+                                <span style={{fontSize: 10, fontWeight: 400, marginLeft: 5}}>
+                                    ({netCash > 0 ? '+' : ''}{netCash.toLocaleString()})
+                                </span>
+                            )}
+                        </strong>
+                    </div>
+                )}
                 <div style={{display: 'flex', gap: 9}}>
                     <button className="btn btn-green btn-full" onClick={handleSend}>📤 Send Proposal</button>
                     <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
@@ -366,76 +427,93 @@ function BuyPropertyModal({space, boardSpace, me, myProperties, gameId, onClose}
 
 /**
  * Confirmation modal shown before mortgaging or unmortgaging a property.
- * @param {{ prop: any, space: any, onConfirm: function, onClose: function }} props
+ * @param {{ prop: any, space: any, me: any, onConfirm: function, onClose: function }} props
  */
-function MortgageConfirmModal({prop, space, onConfirm, onClose}) {
+function MortgageConfirmModal({prop, space, me, onConfirm, onClose}) {
     const purchasePrice = space?.purchasePrice || prop?.purchasePrice || 0;
     const mortgageValue = Math.floor(purchasePrice / 2);
     const unmortgageCost = Math.ceil(mortgageValue * 1.1);
     const isMortgaged = prop.isMortgaged;
+    const balanceAfter = me ? (isMortgaged ? me.cash - unmortgageCost : me.cash + mortgageValue) : null;
+    const canAfford = !isMortgaged || !me || me.cash >= unmortgageCost;
 
     return (
         <div className="overlay">
             <div className="mbox" style={{maxWidth: 400}}>
                 {space?.color && (
-                    <div style={{
-                        background: BCOLORS[space.color],
-                        height: 36,
-                        borderRadius: '8px 8px 0 0',
-                        marginBottom: 14
-                    }}/>
+                    <div style={{background: BCOLORS[space.color], height: 36, borderRadius: '8px 8px 0 0', marginBottom: 14}}/>
                 )}
                 <h3 style={{marginBottom: 4}}>{isMortgaged ? 'Unmortgage' : 'Mortgage'} Property?</h3>
-                <div style={{fontWeight: 600, fontSize: 15, marginBottom: 12}}>
-                    {prop.name}
+                <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
+                    {space?.color && (
+                        <div style={{width: 8, height: 18, background: BCOLORS[space.color], borderRadius: 2, flexShrink: 0}}/>
+                    )}
+                    <span style={{fontWeight: 600, fontSize: 15}}>{prop.name}</span>
+                    <span style={{color: '#aaa', fontSize: 12, marginLeft: 'auto'}}>${purchasePrice.toLocaleString()}</span>
                 </div>
+                {me && <ModalBalanceBar cash={me.cash}/>}
                 <div style={{
                     background: 'var(--cream)', padding: 14, borderRadius: 10, marginBottom: 16,
-                    display: 'flex', flexDirection: 'column', gap: 9
+                    display: 'flex', flexDirection: 'column', gap: 9,
                 }}>
                     {!isMortgaged ? (
                         <>
                             <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14}}>
-                                <span style={{color: '#666'}}>Purchase Price</span>
+                                <span style={{color: '#aaa'}}>Purchase Price</span>
                                 <strong>${purchasePrice.toLocaleString()}</strong>
                             </div>
-                            <div style={{
-                                display: 'flex', justifyContent: 'space-between', fontSize: 15,
-                                borderTop: '1px solid var(--border)', paddingTop: 9
-                            }}>
-                                <span style={{color: '#666'}}>You will receive</span>
-                                <strong style={{color: 'var(--green)'}}>${mortgageValue.toLocaleString()}</strong>
+                            <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 15, borderTop: '1px solid var(--border)', paddingTop: 9}}>
+                                <span style={{color: '#aaa'}}>You will receive</span>
+                                <strong style={{color: 'var(--green)'}}>+${mortgageValue.toLocaleString()}</strong>
                             </div>
-                            <div style={{fontSize: 11, color: '#999', fontStyle: 'italic'}}>
+                            {balanceAfter !== null && (
+                                <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 13}}>
+                                    <span style={{color: '#aaa'}}>Balance after</span>
+                                    <strong style={{color: 'var(--gold)'}}>${balanceAfter.toLocaleString()}</strong>
+                                </div>
+                            )}
+                            <div style={{fontSize: 11, color: '#aaa', fontStyle: 'italic'}}>
                                 Unmortgaging later costs ${unmortgageCost.toLocaleString()} (10% interest)
                             </div>
                         </>
                     ) : (
                         <>
                             <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14}}>
-                                <span style={{color: '#666'}}>Mortgage Value</span>
+                                <span style={{color: '#aaa'}}>Mortgage Value</span>
                                 <strong>${mortgageValue.toLocaleString()}</strong>
                             </div>
-                            <div style={{
-                                display: 'flex', justifyContent: 'space-between', fontSize: 15,
-                                borderTop: '1px solid var(--border)', paddingTop: 9
-                            }}>
-                                <span style={{color: '#666'}}>Cost to Unmortgage</span>
-                                <strong style={{color: 'var(--red)'}}>${unmortgageCost.toLocaleString()}</strong>
+                            <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 15, borderTop: '1px solid var(--border)', paddingTop: 9}}>
+                                <span style={{color: '#aaa'}}>Cost to Unmortgage</span>
+                                <strong style={{color: 'var(--red)'}}>−${unmortgageCost.toLocaleString()}</strong>
                             </div>
-                            <div style={{fontSize: 11, color: '#999', fontStyle: 'italic'}}>
+                            {balanceAfter !== null && (
+                                <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 13}}>
+                                    <span style={{color: '#aaa'}}>Balance after</span>
+                                    <strong style={{color: canAfford ? 'var(--gold)' : 'var(--red)'}}>
+                                        ${balanceAfter.toLocaleString()}
+                                    </strong>
+                                </div>
+                            )}
+                            <div style={{fontSize: 11, color: '#aaa', fontStyle: 'italic'}}>
                                 Includes 10% interest on the ${mortgageValue.toLocaleString()} mortgage value
                             </div>
                         </>
                     )}
                 </div>
+                {!canAfford && (
+                    <div style={{
+                        background: 'rgba(229,57,53,0.12)', color: 'var(--red)',
+                        padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12,
+                        textAlign: 'center', fontWeight: 600,
+                    }}>
+                        ⚠ Insufficient funds to unmortgage!
+                    </div>
+                )}
                 <div style={{display: 'flex', gap: 9}}>
                     <button
                         className={`btn btn-full ${isMortgaged ? 'btn-green' : 'btn-red'}`}
-                        onClick={() => {
-                            onConfirm();
-                            onClose();
-                        }}
+                        disabled={!canAfford}
+                        onClick={() => { onConfirm(); onClose(); }}
                     >
                         {isMortgaged ? `✓ Unmortgage for $${unmortgageCost.toLocaleString()}` : `✓ Mortgage for $${mortgageValue.toLocaleString()}`}
                     </button>
@@ -450,9 +528,9 @@ function MortgageConfirmModal({prop, space, onConfirm, onClose}) {
  * Modal for selling houses/hotels back to the bank at 50% build cost.
  * Supports multi-select; shows per-unit value and total payout before confirming.
  * SellHotel downgrades to 4 houses; SellHouse removes one house at a time.
- * @param {{ myProperties: any[], boardSpaces: any[], gameId: string, onClose: function }} props
+ * @param {{ myProperties: any[], boardSpaces: any[], me: any, gameId: string, onClose: function }} props
  */
-function LiquidateBuildingsModal({myProperties, boardSpaces, gameId, onClose}) {
+function LiquidateBuildingsModal({myProperties, boardSpaces, me, gameId, onClose}) {
     const {toast} = useContext(Ctx);
     const [selected, setSelected] = useState({});
     const [selling, setSelling] = useState(false);
@@ -475,6 +553,8 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, gameId, onClose}) {
     const totalPayout = buildingProps
         .filter(p => selected[p.id])
         .reduce((sum, p) => sum + getSellInfo(p).total, 0);
+
+    const balanceAfter = me ? me.cash + totalPayout : null;
 
     const handleConfirm = async () => {
         setSelling(true);
@@ -502,12 +582,15 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, gameId, onClose}) {
         <div className="overlay">
             <div className="mbox" style={{maxWidth: 420}}>
                 <h3 style={{marginBottom: 4}}>💰 Liquidate Buildings</h3>
-                <p style={{color: '#999', fontSize: 13, marginBottom: 16}}>Select buildings to sell back at 50% build
-                    cost</p>
+                <p style={{color: '#999', fontSize: 13, marginBottom: 10}}>
+                    Select buildings to sell back at 50% build cost
+                </p>
+                {me && <ModalBalanceBar cash={me.cash}/>}
 
                 {buildingProps.length === 0 && (
-                    <div style={{color: '#aaa', fontSize: 13, textAlign: 'center', padding: '20px 0'}}>No buildings to
-                        sell</div>
+                    <div style={{color: '#aaa', fontSize: 13, textAlign: 'center', padding: '20px 0'}}>
+                        No buildings to sell
+                    </div>
                 )}
 
                 {buildingProps.map(prop => {
@@ -524,19 +607,14 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, gameId, onClose}) {
                         }}>
                             <input type="checkbox" checked={isSelected} onChange={() => toggle(prop.id)}/>
                             {space?.color && (
-                                <div style={{
-                                    width: 8,
-                                    height: 20,
-                                    background: BCOLORS[space.color] || '#ccc',
-                                    borderRadius: 2,
-                                    flexShrink: 0
-                                }}/>
+                                <div style={{width: 8, height: 20, background: BCOLORS[space.color] || '#ccc', borderRadius: 2, flexShrink: 0}}/>
                             )}
                             <div style={{flex: 1, minWidth: 0}}>
                                 <div style={{fontWeight: 600, fontSize: 12}}>{prop.name}</div>
-                                <div style={{fontSize: 11, color: '#888'}}>
+                                <div style={{fontSize: 11, color: '#aaa'}}>
                                     {info.label}
                                     {info.perUnit > 0 && ` · $${info.perUnit} each`}
+                                    {space?.houseCost && <span style={{color: '#888'}}> (build cost: ${space.houseCost})</span>}
                                 </div>
                             </div>
                             <div style={{fontSize: 13, fontWeight: 700, color: 'var(--green)', flexShrink: 0}}>
@@ -548,15 +626,23 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, gameId, onClose}) {
 
                 {buildingProps.length > 0 && (
                     <div style={{
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        padding: '10px 2px', borderTop: '1.5px solid var(--border)', margin: '8px 0 14px',
+                        borderTop: '1.5px solid var(--border)', margin: '8px 0 8px',
+                        paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 6,
                     }}>
-                        <span style={{color: '#999', fontSize: 13}}>Total payout</span>
-                        <strong style={{fontSize: 18, color: 'var(--green)'}}>+${totalPayout.toLocaleString()}</strong>
+                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                            <span style={{color: '#aaa', fontSize: 13}}>Total payout</span>
+                            <strong style={{fontSize: 18, color: 'var(--green)'}}>+${totalPayout.toLocaleString()}</strong>
+                        </div>
+                        {balanceAfter !== null && totalPayout > 0 && (
+                            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                <span style={{color: '#aaa', fontSize: 12}}>Balance after</span>
+                                <strong style={{color: 'var(--gold)', fontSize: 14}}>${balanceAfter.toLocaleString()}</strong>
+                            </div>
+                        )}
                     </div>
                 )}
 
-                <div style={{display: 'flex', gap: 9}}>
+                <div style={{display: 'flex', gap: 9, marginTop: 6}}>
                     <button
                         className="btn btn-green btn-full"
                         onClick={handleConfirm}
@@ -564,6 +650,86 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, gameId, onClose}) {
                     >
                         {selling ? '…' : '✓ Sell Selected'}
                     </button>
+                    <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * Confirmation modal for building a house or hotel on a property.
+ * @param {{ prop: any, space: any, buildType: 'house'|'hotel', me: any, onConfirm: function, onClose: function }} props
+ */
+function BuildConfirmModal({prop, space, buildType, me, onConfirm, onClose}) {
+    const cost = prop.houseCost || space?.houseCost || 0;
+    const balanceAfter = me ? me.cash - cost : null;
+    const canAfford = !me || me.cash >= cost;
+    const isHotel = buildType === 'hotel';
+
+    return (
+        <div className="overlay">
+            <div className="mbox" style={{maxWidth: 380}}>
+                {space?.color && (
+                    <div style={{background: BCOLORS[space.color], height: 34, borderRadius: '8px 8px 0 0', marginBottom: 14}}/>
+                )}
+                <h3 style={{marginBottom: 4}}>{isHotel ? '🏨 Build Hotel' : '🏠 Build House'}</h3>
+                <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14}}>
+                    {space?.color && (
+                        <div style={{width: 8, height: 18, background: BCOLORS[space.color], borderRadius: 2, flexShrink: 0}}/>
+                    )}
+                    <span style={{fontWeight: 600, fontSize: 15}}>{prop.name}</span>
+                </div>
+                {me && <ModalBalanceBar cash={me.cash}/>}
+                <div style={{
+                    background: 'var(--cream)', padding: 14, borderRadius: 10, marginBottom: 14,
+                    display: 'flex', flexDirection: 'column', gap: 9,
+                }}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14}}>
+                        <span style={{color: '#aaa'}}>{isHotel ? 'Hotel' : 'House'} Cost</span>
+                        <strong style={{color: 'var(--red)'}}>−${cost.toLocaleString()}</strong>
+                    </div>
+                    {balanceAfter !== null && (
+                        <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 14, borderTop: '1px solid var(--border)', paddingTop: 9}}>
+                            <span style={{color: '#aaa'}}>Balance After</span>
+                            <strong style={{color: canAfford ? 'var(--gold)' : 'var(--red)'}}>
+                                ${balanceAfter.toLocaleString()}
+                            </strong>
+                        </div>
+                    )}
+                </div>
+                {!canAfford && (
+                    <div style={{
+                        background: 'rgba(229,57,53,0.12)', color: 'var(--red)',
+                        padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12,
+                        textAlign: 'center', fontWeight: 600,
+                    }}>
+                        ⚠ Insufficient funds!
+                    </div>
+                )}
+                <div style={{display: 'flex', gap: 9}}>
+                    <button className="btn btn-green btn-full" disabled={!canAfford} onClick={() => { onConfirm(); onClose(); }}>
+                        ✓ Confirm
+                    </button>
+                    <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/** Resign confirmation modal. */
+function ResignModal({onConfirm, onClose}) {
+    return (
+        <div className="overlay">
+            <div className="mbox" style={{maxWidth: 360, textAlign: 'center'}}>
+                <div style={{fontSize: 38, marginBottom: 10}}>🏳</div>
+                <h3 style={{marginBottom: 8}}>Resign from game?</h3>
+                <p style={{color: '#aaa', fontSize: 13, marginBottom: 22}}>
+                    You will be eliminated and your properties returned to the bank. This cannot be undone.
+                </p>
+                <div style={{display: 'flex', gap: 9}}>
+                    <button className="btn btn-red btn-full" onClick={() => { onConfirm(); onClose(); }}>🏳 Yes, Resign</button>
                     <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
                 </div>
             </div>
@@ -587,6 +753,8 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
     const [drawnCard, setDrawnCard] = useState(null); // { type, text, amount? }
     const [liquidateOpen, setLiquidateOpen] = useState(false);
     const [showLog, setShowLog] = useState(false);
+    const [buildPending, setBuildPending] = useState(null); // { prop, space, buildType }
+    const [resignOpen, setResignOpen] = useState(false);
 
     const players = gameState?.players || [];
     const animatedPositions = usePlayerHop(players);
@@ -701,14 +869,14 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                         </div>
                     ))}
                     <div className="div">Info</div>
-                    <div style={{padding: '10px 13px', background: '#fff', border: '1.5px solid var(--border)', borderRadius: 10}}>
+                    <div className="info-box">
                         {[
                             ['Turn', `#${gameState?.turn || 0}`],
                             ['Current', currentPlayer?.name || '—'],
                             ['Active', players.filter(p => !p.isBankrupt).length],
                         ].map(([label, value]) => (
                             <div key={String(label)} style={{display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 5}}>
-                                <span style={{color: '#aaa'}}>{label}</span>
+                                <span style={{color: 'rgba(255,255,255,0.45)'}}>{label}</span>
                                 <strong style={{color: 'var(--gold)'}}>{value}</strong>
                             </div>
                         ))}
@@ -742,51 +910,82 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                         rolling={rolling}
                         actionPanel={
                             <div className="board-actions">
-                                {isMyTurn && !paused && gameState?.status === 'InProgress' && (
-                                    <>
-                                        {me?.isInJail && (
-                                            <button className="btn btn-red btn-board btn-full"
-                                                    onClick={() => setJailModalOpen(true)}>
-                                                ⛓ Handle Jail
-                                            </button>
-                                        )}
-                                        <div className="action-row">
-                                            <button className="btn btn-gold btn-board" onClick={handleRoll}
-                                                    disabled={me?.hasRolledDice || rolling || me?.isInJail}>
-                                                {rolling ? '…' : '🎲 Roll'}
-                                            </button>
-                                            <button className="btn btn-green btn-board" onClick={() => setBuyModalOpen(true)}
-                                                    disabled={!canBuy}>
-                                                🏠 {canBuy ? `$${boardSpace?.purchasePrice || '?'}` : 'Buy'}
-                                            </button>
-                                            <button className="btn btn-ghost btn-board"
-                                                    onClick={() => hubCall('EndTurn', gameId)}
-                                                    disabled={!me?.hasRolledDice}>
-                                                ⏭ End
-                                            </button>
-                                        </div>
-                                        {currentSpace && (
-                                            <div style={{fontSize: 'clamp(7px, 1.1cqw, 10px)', color: '#666', textAlign: 'center', lineHeight: 1.3}}>
-                                                📍 <strong>{currentSpace.name.replace('\n', ' ')}</strong>
-                                                {canBuy && <span style={{color: 'var(--green)'}}> · available</span>}
-                                                {isOwned && !isMine && <span style={{color: 'var(--red)'}}> · pay rent</span>}
-                                                {isMine && <span style={{color: '#aaa'}}> · yours</span>}
-                                            </div>
-                                        )}
-                                        <button className="btn btn-board btn-ghost"
-                                                style={{color: 'var(--red)'}}
-                                                onClick={() => { if (confirm('Resign from game?')) { hubCall('ResignPlayer', gameId); } }}>
-                                            🏳 Resign
-                                        </button>
-                                        <TurnTimer startedAt={gameState?.currentTurnStartedAt}/>
-                                    </>
-                                )}
-                                {!isMyTurn && gameState?.status === 'InProgress' && (
-                                    <div style={{fontSize: 'clamp(7px, 1.1cqw, 11px)', color: '#aaa', textAlign: 'center', display: 'flex', alignItems: 'center', gap: 5}}>
-                                        <div className="spin" style={{width: 10, height: 10, flexShrink: 0}}/>
-                                        <span>Waiting for <strong>{currentPlayer?.name}</strong>…</span>
-                                    </div>
-                                )}
+                                {/* Slot 1: jail button — holds its height always */}
+                                <div style={{
+                                    width: '100%',
+                                    visibility: (isMyTurn && !paused && me?.isInJail) ? 'visible' : 'hidden',
+                                    pointerEvents: (isMyTurn && !paused && me?.isInJail) ? 'auto' : 'none',
+                                }}>
+                                    <button className="btn btn-red btn-board btn-full" onClick={() => setJailModalOpen(true)}>
+                                        ⛓ Handle Jail
+                                    </button>
+                                </div>
+
+                                {/* Slot 2: main roll/buy/end row — always in flow */}
+                                <div className="action-row" style={{
+                                    visibility: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'visible' : 'hidden',
+                                    pointerEvents: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'auto' : 'none',
+                                }}>
+                                    <button className="btn btn-gold btn-board" onClick={handleRoll}
+                                            disabled={me?.hasRolledDice || rolling || me?.isInJail}>
+                                        {rolling ? '…' : '🎲 Roll'}
+                                    </button>
+                                    <button className="btn btn-green btn-board" onClick={() => setBuyModalOpen(true)}
+                                            disabled={!canBuy}>
+                                        🏠 {canBuy ? `$${boardSpace?.purchasePrice || '?'}` : 'Buy'}
+                                    </button>
+                                    <button className="btn btn-ghost btn-board"
+                                            onClick={() => hubCall('EndTurn', gameId)}
+                                            disabled={!me?.hasRolledDice}>
+                                        ⏭ End
+                                    </button>
+                                </div>
+
+                                {/* Slot 3: status line — location when my turn, waiting spinner otherwise */}
+                                <div style={{
+                                    fontSize: 'clamp(7px, 1.1cqw, 10px)',
+                                    color: '#666',
+                                    textAlign: 'center',
+                                    lineHeight: 1.3,
+                                    minHeight: 'clamp(12px, 2cqw, 16px)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: 5,
+                                }}>
+                                    {isMyTurn && !paused && currentSpace && gameState?.status === 'InProgress' ? (
+                                        <>
+                                            📍 <strong>{currentSpace.name.replace('\n', ' ')}</strong>
+                                            {canBuy && <span style={{color: 'var(--green)'}}> · available</span>}
+                                            {isOwned && !isMine && <span style={{color: 'var(--red)'}}> · pay rent</span>}
+                                            {isMine && <span style={{color: '#aaa'}}> · yours</span>}
+                                        </>
+                                    ) : !isMyTurn && gameState?.status === 'InProgress' ? (
+                                        <>
+                                            <div className="spin" style={{width: 10, height: 10, flexShrink: 0}}/>
+                                            <span style={{color: '#aaa'}}>Waiting for <strong>{currentPlayer?.name}</strong>…</span>
+                                        </>
+                                    ) : (
+                                        <span style={{visibility: 'hidden'}}>—</span>
+                                    )}
+                                </div>
+
+                                {/* Slot 4: resign + timer — always in flow */}
+                                <div style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                    width: '100%',
+                                    visibility: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'visible' : 'hidden',
+                                    pointerEvents: (isMyTurn && !paused && gameState?.status === 'InProgress') ? 'auto' : 'none',
+                                }}>
+                                    <button className="btn btn-board btn-ghost" style={{color: 'var(--red)'}}
+                                            onClick={() => setResignOpen(true)}>
+                                        🏳 Resign
+                                    </button>
+                                    <TurnTimer startedAt={gameState?.currentTurnStartedAt}/>
+                                </div>
                             </div>
                         }
                     />
@@ -813,7 +1012,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                             )}
                             {items.map(prop => {
                                 const space = SPACES.find(s => s.id === prop.id);
-                                const houseCost = space?.houseCost;
+                                const houseCost = prop.houseCost || space?.houseCost;
                                 return (
                                     <div key={prop.id} className="prop-row">
                                         <div style={{display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5}}>
@@ -830,13 +1029,13 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                                             <div style={{display: 'flex', gap: 5, flexWrap: 'wrap'}}>
                                                 {space?.type === 'Street' && !prop.isMortgaged && prop.houseCount < 4 && !prop.hasHotel && (
                                                     <button className="btn btn-sm btn-ghost" style={{fontSize: 10}}
-                                                            onClick={() => hubCall('BuildHouse', gameId, prop.id)}>
+                                                            onClick={() => setBuildPending({prop, space, buildType: 'house'})}>
                                                         +🏠{houseCost ? ` $${houseCost}` : ''}
                                                     </button>
                                                 )}
                                                 {space?.type === 'Street' && !prop.isMortgaged && prop.houseCount === 4 && !prop.hasHotel && (
                                                     <button className="btn btn-sm btn-ghost" style={{fontSize: 10}}
-                                                            onClick={() => hubCall('BuildHotel', gameId, prop.id)}>
+                                                            onClick={() => setBuildPending({prop, space, buildType: 'hotel'})}>
                                                         +🏨{houseCost ? ` $${houseCost}` : ''}
                                                     </button>
                                                 )}
@@ -880,6 +1079,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                 <LiquidateBuildingsModal
                     myProperties={myProperties}
                     boardSpaces={boardSpaces}
+                    me={me}
                     gameId={gameId}
                     onClose={() => setLiquidateOpen(false)}
                 />
@@ -888,7 +1088,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                 <ChestCardPopup card={drawnCard} onDismiss={() => setDrawnCard(null)}/>
             )}
             {incomingTrade && (
-                <IncomingTradeModal offer={incomingTrade} gameId={gameId} onDone={() => setIncomingTrade(null)}/>
+                <IncomingTradeModal offer={incomingTrade} me={me} gameId={gameId} onDone={() => setIncomingTrade(null)}/>
             )}
             {jailModalOpen && me && (
                 <JailModal
@@ -900,6 +1100,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
             {tradingWith && (
                 <ProposeTradeModal
                     target={tradingWith}
+                    me={me}
                     myProps={myProperties}
                     board={boardSpaces}
                     gameId={gameId}
@@ -921,8 +1122,25 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
                 <MortgageConfirmModal
                     prop={mortgagePending.prop}
                     space={mortgagePending.space}
+                    me={me}
                     onConfirm={() => hubCall('ToggleMortgage', gameId, mortgagePending.prop.id)}
                     onClose={() => setMortgagePending(null)}
+                />
+            )}
+            {buildPending && (
+                <BuildConfirmModal
+                    prop={buildPending.prop}
+                    space={buildPending.space}
+                    buildType={buildPending.buildType}
+                    me={me}
+                    onConfirm={() => hubCall(buildPending.buildType === 'hotel' ? 'BuildHotel' : 'BuildHouse', gameId, buildPending.prop.id)}
+                    onClose={() => setBuildPending(null)}
+                />
+            )}
+            {resignOpen && (
+                <ResignModal
+                    onConfirm={() => hubCall('ResignPlayer', gameId)}
+                    onClose={() => setResignOpen(false)}
                 />
             )}
         </div>

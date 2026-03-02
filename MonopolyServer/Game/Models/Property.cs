@@ -141,7 +141,13 @@ public class Property
         Name = name;
         Type = propertyType;
         Position = position;
-        PurchasePrice = propertyType == PropertyType.Utility ? 150 : 0;
+        PurchasePrice = propertyType switch
+        {
+            PropertyType.Utility => 150,
+            PropertyType.Tax when Name.Contains("income", StringComparison.OrdinalIgnoreCase) => 200,
+            PropertyType.Tax => 100,
+            _ => 0
+        };
         MortgageValue = propertyType == PropertyType.Utility ? 75 : 0;
         OwnerId = null;
         IsMortgaged = false;
