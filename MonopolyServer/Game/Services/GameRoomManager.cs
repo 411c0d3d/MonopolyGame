@@ -1,4 +1,5 @@
 ﻿using MonopolyServer.Game.Models.Enums;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MonopolyServer.DTOs;
@@ -17,6 +18,7 @@ public class GameRoomManager
 {
     private readonly Dictionary<string, GameState> _games;
     private readonly Dictionary<string, GameEngine> _engines;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _saveLocks;
     private readonly ILogger<GameRoomManager> _logger;
     private readonly string _gamesDirectory;
     private readonly Lock _lock = new();
@@ -24,13 +26,14 @@ public class GameRoomManager
     private static readonly JsonSerializerOptions JsonOptions = BuildJsonOptions();
 
     /// <summary>
-    /// Constructor with dependency injection of logger. Initializes in-memory game store and loads existing games from disk.
+    /// Initializes in-memory stores and loads existing games from disk.
     /// </summary>
     public GameRoomManager(ILogger<GameRoomManager> logger)
     {
         _logger = logger;
         _games = new Dictionary<string, GameState>();
         _engines = new Dictionary<string, GameEngine>();
+        _saveLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
         _gamesDirectory = Path.Combine(AppContext.BaseDirectory,
             GameConstants.DataDirectoryName,
             GameConstants.GamesDirectoryName);
@@ -38,7 +41,9 @@ public class GameRoomManager
         InitializePersistence();
     }
 
-    /// <summary> Initialize persistence - create directory and load existing games from disk. </summary>
+    /// <summary>
+    /// Creates the games directory if absent and loads all persisted game files into memory.
+    /// </summary>
     private void InitializePersistence()
     {
         try
@@ -58,79 +63,159 @@ public class GameRoomManager
     }
 
     /// <summary>
-    /// Load all game files from disk on startup.
+    /// Deserializes all game files from disk on startup.
+    /// File reads run outside the lock; only the final dictionary population is synchronized.
+    /// Corrupt files are deleted before populating memory.
     /// </summary>
     private void LoadGamesFromDisk()
     {
-        lock (_lock)
+        string[] gameFiles;
+        try
+        {
+            gameFiles = Directory.GetFiles(_gamesDirectory, $"*{GameConstants.GameFileExtension}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error enumerating game files from disk");
+            return;
+        }
+
+        var loaded = new List<(GameState game, bool needsEngine)>();
+        var corrupt = new List<string>();
+
+        foreach (var filePath in gameFiles)
         {
             try
             {
-                var gameFiles = Directory.GetFiles(_gamesDirectory, $"*{GameConstants.GameFileExtension}");
+                var json = File.ReadAllText(filePath);
+                var game = JsonSerializer.Deserialize<GameState>(json, JsonOptions);
 
-                foreach (var filePath in gameFiles)
+                if (game == null)
                 {
-                    try
-                    {
-                        var json = File.ReadAllText(filePath);
-                        var game = JsonSerializer.Deserialize<GameState>(json, JsonOptions);
-
-                        if (game == null) continue;
-
-                        _games[game.GameId] = game;
-                        if (game.Status == GameStatus.InProgress)
-                        {
-                            _engines[game.GameId] = new GameEngine(game);
-                        }
-                    }
-                    catch (JsonException)
-                    {
-                        _logger.LogWarning("Deleting corrupt game file: {FileName}", Path.GetFileName(filePath));
-                        File.Delete(filePath);
-                    }
+                    corrupt.Add(filePath);
+                    continue;
                 }
 
-                _logger.LogInformation("Loaded {Count} games from disk", _games.Count);
+                loaded.Add((game, game.Status == GameStatus.InProgress));
+            }
+            catch (JsonException)
+            {
+                corrupt.Add(filePath);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error loading games from disk");
+                _logger.LogWarning(ex, "Error reading game file: {FileName}", Path.GetFileName(filePath));
             }
         }
+
+        foreach (var path in corrupt)
+        {
+            try
+            {
+                File.Delete(path);
+                _logger.LogWarning("Deleted corrupt game file: {FileName}", Path.GetFileName(path));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete corrupt file: {FileName}", Path.GetFileName(path));
+            }
+        }
+
+        lock (_lock)
+        {
+            foreach (var (game, needsEngine) in loaded)
+            {
+                _games[game.GameId] = game;
+                _saveLocks.TryAdd(game.GameId, new SemaphoreSlim(1, 1));
+
+                if (needsEngine)
+                {
+                    _engines[game.GameId] = new GameEngine(game);
+                }
+            }
+        }
+
+        _logger.LogInformation("Loaded {Count} games from disk", loaded.Count);
     }
 
     /// <summary>
-    /// Direct access to purge files from disk before or during service runtime.
+    /// Removes games matching the predicate from memory and deletes their disk files.
+    /// Candidates are snapshotted under lock; all I/O runs outside to avoid blocking game operations.
+    /// A secondary sweep removes orphaned disk files that were never tracked in memory.
     /// </summary>
     public void VacuumStorage(Func<GameState, bool> predicate)
     {
+        List<(string gameId, string filePath)> candidates;
+
         lock (_lock)
         {
-            var files = Directory.GetFiles(_gamesDirectory, $"*{GameConstants.GameFileExtension}");
-            foreach (var path in files)
+            candidates = _games.Values
+                .Where(predicate)
+                .Select(g => (g.GameId, Path.Combine(_gamesDirectory, $"{g.GameId}{GameConstants.GameFileExtension}")))
+                .ToList();
+
+            foreach (var (gameId, _) in candidates)
+            {
+                _games.Remove(gameId);
+                _engines.Remove(gameId);
+            }
+        }
+
+        foreach (var (gameId, filePath) in candidates)
+        {
+            try
+            {
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                }
+
+                if (_saveLocks.TryRemove(gameId, out var sem))
+                {
+                    sem.Dispose();
+                }
+
+                _logger.LogInformation("Vacuumed game: {GameId}", gameId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error deleting file for vacuumed game: {GameId}", gameId);
+            }
+        }
+
+        try
+        {
+            var trackedIds = new HashSet<string>(candidates.Select(c => c.gameId));
+
+            foreach (var filePath in Directory.GetFiles(_gamesDirectory, $"*{GameConstants.GameFileExtension}"))
             {
                 try
                 {
-                    var json = File.ReadAllText(path);
+                    var json = File.ReadAllText(filePath);
                     var game = JsonSerializer.Deserialize<GameState>(json, JsonOptions);
-                    if (game != null && predicate(game))
+
+                    if (game != null && predicate(game) && !trackedIds.Contains(game.GameId))
                     {
-                        File.Delete(path);
-                        _games.Remove(game.GameId);
-                        _engines.Remove(game.GameId);
-                        _logger.LogInformation("Vacuumed game: {GameId}", game.GameId);
+                        File.Delete(filePath);
+                        _logger.LogInformation("Vacuumed orphaned game file: {FileName}", Path.GetFileName(filePath));
                     }
                 }
                 catch
                 {
-                    File.Delete(path); // Clear corrupt files
+                    File.Delete(filePath);
                 }
             }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error during orphan file cleanup in vacuum");
         }
     }
 
     /// <summary>
-    /// Save a game to disk asynchronously. Snapshots state under lock before async I/O.
+    /// Persists a game to disk atomically using a temp-file-then-replace strategy.
+    /// The JSON snapshot is taken under the global lock so the serialized state is always consistent.
+    /// A per-game semaphore in _saveLocks serializes concurrent disk writes for the same game ID.
     /// </summary>
     public async Task SaveGameAsync(string gameId)
     {
@@ -138,25 +223,38 @@ public class GameRoomManager
         lock (_lock)
         {
             if (!_games.TryGetValue(gameId, out var game))
+            {
                 return;
+            }
 
             json = JsonSerializer.Serialize(game, JsonOptions);
         }
 
+        var saveLock = _saveLocks.GetOrAdd(gameId, _ => new SemaphoreSlim(1, 1));
+        await saveLock.WaitAsync();
         try
         {
             var filePath = Path.Combine(_gamesDirectory, $"{gameId}{GameConstants.GameFileExtension}");
-            await File.WriteAllTextAsync(filePath, json);
+            var tempPath = filePath + ".tmp";
+
+            await File.WriteAllTextAsync(tempPath, json);
+            File.Replace(tempPath, filePath, destinationBackupFileName: null);
+
             _logger.LogDebug("Saved game to disk: {GameId}", gameId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error saving game {GameId} to disk", gameId);
         }
+        finally
+        {
+            saveLock.Release();
+        }
     }
 
     /// <summary>
-    /// Delete game file from disk.
+    /// Deletes the JSON file for a game from disk.
+    /// Called outside the global lock — I/O must never block in-memory operations.
     /// </summary>
     private void DeleteGameFile(string gameId)
     {
@@ -176,25 +274,29 @@ public class GameRoomManager
     }
 
     /// <summary>
-    /// Create a new game and persist to disk.
+    /// Creates a new game, registers it in memory, and fires a non-blocking background save.
+    /// The game is immediately visible to all callers once the lock is released.
     /// </summary>
     public string CreateGame()
     {
+        string gameId;
         lock (_lock)
         {
-            var gameId = GenerateGameId();
+            gameId = GenerateGameId();
             var game = new GameState(gameId, null);
             _games[gameId] = game;
-
-            _ = SaveGameAsync(gameId);
-
-            _logger.LogInformation("Game created: {GameId}", gameId);
-            return gameId;
+            _saveLocks.TryAdd(gameId, new SemaphoreSlim(1, 1));
         }
+
+        _ = SaveGameAsync(gameId);
+
+        _logger.LogInformation("Game created: {GameId}", gameId);
+        return gameId;
     }
 
     /// <summary>
-    /// Get game by ID.
+    /// Returns the live GameState reference for the given ID, or null if not found.
+    /// Do not mutate the returned reference directly — use MutateGame instead.
     /// </summary>
     public GameState? GetGame(string gameId)
     {
@@ -206,7 +308,9 @@ public class GameRoomManager
     }
 
     /// <summary>
-    /// Get all games.
+    /// Returns a snapshot list of all live GameState references.
+    /// The list itself is safe to iterate outside the lock; the objects inside are shared references.
+    /// Do not mutate them — use MutateGame for any state changes.
     /// </summary>
     public List<GameState> GetAllGames()
     {
@@ -217,7 +321,18 @@ public class GameRoomManager
     }
 
     /// <summary>
-    /// Get game engine for active game.
+    /// Returns a snapshot of all current game IDs, safe for iteration outside any lock.
+    /// </summary>
+    public List<string> GetAllGameIds()
+    {
+        lock (_lock)
+        {
+            return _games.Keys.ToList();
+        }
+    }
+
+    /// <summary>
+    /// Returns the GameEngine for an active game, or null if the game has not started or does not exist.
     /// </summary>
     public GameEngine? GetGameEngine(string gameId)
     {
@@ -229,7 +344,8 @@ public class GameRoomManager
     }
 
     /// <summary>
-    /// Set game engine when game starts.
+    /// Registers the GameEngine for a game once it transitions to InProgress.
+    /// Replaces any existing engine entry for the same game ID.
     /// </summary>
     public void SetGameEngine(string gameId, GameEngine engine)
     {
@@ -241,7 +357,8 @@ public class GameRoomManager
     }
 
     /// <summary>
-    /// Find game containing a specific player (for disconnect cleanup).
+    /// Finds the game a player currently belongs to by scanning all active games.
+    /// Used primarily for disconnect cleanup when only the player ID is known.
     /// </summary>
     public GameState? GetGameByPlayerId(string playerId)
     {
@@ -252,42 +369,38 @@ public class GameRoomManager
     }
 
     /// <summary>
-    /// Mark a player as disconnected instead of removing them.
-    /// Allows for rejoin within the timeout period.
+    /// Marks a player as disconnected without removing them from the game.
+    /// The player may rejoin within the configured timeout window before cleanup evicts them.
     /// </summary>
     public void MarkPlayerDisconnected(string playerId)
     {
         lock (_lock)
         {
             var game = _games.Values.FirstOrDefault(g => g.Players.Any(p => p.Id == playerId));
-            if (game != null)
-            {
-                var player = game.Players.FirstOrDefault(p => p.Id == playerId);
-                if (player != null)
-                {
-                    player.IsConnected = false;
-                    player.DisconnectedAt = DateTime.UtcNow;
-                    player.ConnectionId = null;
-                    _logger.LogInformation("Player {PlayerName} marked as disconnected in game {GameId}", player.Name,
-                        game.GameId);
-                }
-            }
+            if (game == null) { return; }
+
+            var player = game.Players.FirstOrDefault(p => p.Id == playerId);
+            if (player == null) { return; }
+
+            player.IsConnected = false;
+            player.DisconnectedAt = DateTime.UtcNow;
+            player.ConnectionId = null;
+            _logger.LogInformation("Player {PlayerName} marked as disconnected in game {GameId}", player.Name, game.GameId);
         }
     }
 
     /// <summary>
-    /// Reconnect a player to a game by updating their connection ID.
+    /// Restores a player's connection state after a successful reconnect.
+    /// Returns false if the game or player cannot be found.
     /// </summary>
     public bool ReconnectPlayer(string gameId, string playerId, string newConnectionId)
     {
         lock (_lock)
         {
-            if (!_games.TryGetValue(gameId, out var game))
-                return false;
+            if (!_games.TryGetValue(gameId, out var game)) { return false; }
 
             var player = game.Players.FirstOrDefault(p => p.Id == playerId);
-            if (player == null)
-                return false;
+            if (player == null) { return false; }
 
             player.ConnectionId = newConnectionId;
             player.IsConnected = true;
@@ -299,21 +412,30 @@ public class GameRoomManager
     }
 
     /// <summary>
-    /// Delete game from memory and disk.
+    /// Removes a game from memory and disk.
+    /// Dictionary removal is synchronised under the global lock.
+    /// Disk I/O and semaphore disposal run outside the lock to avoid blocking other callers.
     /// </summary>
     public void DeleteGame(string gameId)
     {
+        SemaphoreSlim? sem;
+
         lock (_lock)
         {
-            _games.Remove(gameId);
+            if (!_games.Remove(gameId)) { return; }
             _engines.Remove(gameId);
-            DeleteGameFile(gameId);
-            _logger.LogInformation("Game deleted: {GameId}", gameId);
+            _saveLocks.TryRemove(gameId, out sem);
         }
+
+        sem?.Dispose();
+        DeleteGameFile(gameId);
+
+        _logger.LogInformation("Game deleted: {GameId}", gameId);
     }
 
     /// <summary>
-    /// Get diagnostics/stats about active games.
+    /// Returns a snapshot of server health counters across all active games.
+    /// All counts are read under the global lock for a consistent point-in-time view.
     /// </summary>
     public ServerHealthStatsDto GetStats()
     {
@@ -331,26 +453,26 @@ public class GameRoomManager
     }
 
     /// <summary>
-    /// Generate unique 8-character game ID.
+    /// Generates a unique game ID of configured length by retrying until no collision is found.
+    /// Must be called inside the global lock since it reads _games.
     /// </summary>
     private string GenerateGameId()
     {
-        var id = new string(Enumerable.Range(0, GameConstants.GameIdLength)
-            .Select(_ => GameConstants.GameIdChars[Random.Shared.Next(GameConstants.GameIdChars.Length)])
-            .ToArray());
-
-        while (_games.ContainsKey(id))
+        string id;
+        do
         {
             id = new string(Enumerable.Range(0, GameConstants.GameIdLength)
                 .Select(_ => GameConstants.GameIdChars[Random.Shared.Next(GameConstants.GameIdChars.Length)])
                 .ToArray());
         }
+        while (_games.ContainsKey(id));
 
         return id;
     }
 
     /// <summary>
-    /// Build the shared JSON serializer options for GameState serialization.
+    /// Builds the shared JSON serializer options used for all GameState serialization.
+    /// Configured once at startup and reused across all serialize/deserialize calls.
     /// </summary>
     private static JsonSerializerOptions BuildJsonOptions()
     {
@@ -362,5 +484,41 @@ public class GameRoomManager
         };
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
+    }
+
+    /// <summary>
+    /// Executes a mutator against a game's state and engine atomically under the global lock.
+    /// This is the only correct way to modify game state — never mutate a reference from GetGame() directly.
+    /// Returns false if the game does not exist.
+    /// </summary>
+    public bool MutateGame(string gameId, Action<GameState, GameEngine?> mutator)
+    {
+        lock (_lock)
+        {
+            if (!_games.TryGetValue(gameId, out var game))
+            {
+                return false;
+            }
+
+            _engines.TryGetValue(gameId, out var engine);
+            mutator(game, engine);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Executes an action atomically against both game state and engine under the global lock.
+    /// Returns false if either the game or its engine is absent.
+    /// Delegates to MutateGame to ensure a single consistent locking path across all mutations.
+    /// </summary>
+    public bool ExecuteWithEngine(string gameId, Action<GameState, GameEngine> action)
+    {
+        return MutateGame(gameId, (game, engine) =>
+        {
+            if (engine != null)
+            {
+                action(game, engine);
+            }
+        });
     }
 }

@@ -25,13 +25,13 @@ A full-featured multiplayer Monopoly game built with ASP.NET Core 10, SignalR, a
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|------------|
-| Server | ASP.NET Core 10 |
-| Real-time transport | SignalR |
-| Client | React over Razor (no bundler — plain script tags via index.html) |
-| State | Both decoupled storage repository source of truth and In-memory (`Dictionary<string, GameState>`) with JSON file persistence for recovery |
-| Serialisation | Strongly-typed DTOs, System.Text.Json |
+| Layer               | Technology                                                                                                                                 |
+|---------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| Server              | ASP.NET Core 10                                                                                                                            |
+| Real-time transport | SignalR                                                                                                                                    |
+| Client              | React + Razor (no bundler — plain script tags via index.html)                                                                              |
+| State               | Both decoupled storage repository source of truth and In-memory (`Dictionary<string, GameState>`) with JSON file persistence for recovery. |
+| Serialisation       | Strongly-typed DTOs, System.Text.Json                                                                                                      |
 
 ---
 
@@ -149,11 +149,11 @@ MonopolyClient/
 
 See [ADR.md](ADR.md) for the full architecture decision record covering:
 
-- **Concurrency model** — how `GameRoomManager` uses a single `_lock` to make compound game operations atomic, and why `ConcurrentDictionary` alone is insufficient
+- **Concurrency model** — how `GameRoomManager` uses a single `_lock` to make compound game operations atomic via `MutateGame`, and why `ConcurrentDictionary` alone is insufficient
 - **SignalR hub design** — thin hub pattern (validate · delegate · broadcast), group management, and the disconnect/reconnect lifecycle
 - **React + Razor architecture** — how the shell bootstraps React, the component tree, and why there is no build pipeline
 - **Event subscription pattern** — how components subscribe in `useEffect` and always return unsubscribe functions to prevent listener leaks
-- **Cleanup routine** — the `GameCleanupService` background timer and how `PurgeExpiredGames()` works under lock
+- **Cleanup routine** — the `GameCleanupService` background timer, how `VacuumStorage(predicate)` bulk-removes games, and how all cleanup mutations route through `MutateGame`
 
 ---
 
@@ -163,7 +163,7 @@ See [ADR.md](ADR.md) for the full architecture decision record covering:
 Player clicks Roll
   → gameHub.call('RollDice', gameId)
       → Hub validates it is the caller's turn
-          → GameEngine.RollDice mutates GameState
+          → GameRoomManager.MutateGame delegates to GameEngine.RollDice under lock
               → Hub broadcasts GameStateUpdated + DiceRolled to all players
                   → React re-renders board, tokens, and cash
                   → Dice animation plays and settles on real values
@@ -178,7 +178,7 @@ The server is always the source of truth. The client never modifies game state l
 
 ## Data Layer
 
-- Active game state is held in both memory (`Dictionary<string, GameState>`) for low-latency reads and writes during play. 
+- Active game state is held in both memory (`Dictionary<string, GameState>`) for low-latency reads and writes during play.
 - State is additionally persisted to JSON via file I/O, allowing the server to recover in-progress games across restarts without a database dependency. The persistence layer is isolated from the engine — adding a full database backend requires only a new `IGameStateStore` implementation.
 - **NoSQL database Support**
 
@@ -188,6 +188,7 @@ The server is always the source of truth. The client never modifies game state l
 
 - **No auctions by design** — property stays unowned if declined; auctions slow games down
 - **Roles or permissions is given via Admin Hub** — everyone can create and host but Admin has its own Panel Client and diagnostics view and is rate-limited
+
 ---
 
 ## License

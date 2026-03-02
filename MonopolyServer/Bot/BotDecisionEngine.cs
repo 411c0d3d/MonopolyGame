@@ -55,7 +55,7 @@ public class BotDecisionEngine
     public bool ShouldBuildHouse(Player bot, Property property, GameState state)
     {
         if (bot.Cash < AggressiveThreshold) { return false; }
-        if (property.HouseCount >= 4 || property.HasHotel) { return false; }
+        if (property.HouseCount >= GameConstants.MaxHousesPerProperty || property.HasHotel) { return false; }
         if (property.ColorGroup == null) { return false; }
 
         var colorGroup = state.Board.GetPropertiesByColorGroup(property.ColorGroup).ToList();

@@ -14,57 +14,54 @@ public class LobbyService
     private readonly GameRoomManager _roomManager;
 
     /// <summary>
-    /// Constructor with dependency injection of GameRoomManager for accessing game state.
+    /// Constructor with dependency injection of GameRoomManager.
     /// </summary>
-    /// <param name="roomManager"></param>
     public LobbyService(GameRoomManager roomManager)
     {
         _roomManager = roomManager;
     }
 
     /// <summary>
-    /// Get all available (Waiting) games.
+    /// Get all available (Waiting) games ordered by creation time.
     /// </summary>
     public List<GameRoomInfo> GetAvailableGames()
     {
-        var games = _roomManager.GetAllGames()
+        return _roomManager.GetAllGames()
             .Where(g => g.Status == GameStatus.Waiting)
             .OrderByDescending(g => g.CreatedAt)
-            .Select(game => MapToGameRoomInfo(game))
+            .Select(MapToGameRoomInfo)
             .ToList();
-
-        return games;
     }
 
     /// <summary>
-    /// Get lobby info for a specific game.
+    /// Get lobby info for a specific waiting game.
     /// </summary>
     public GameRoomInfo? GetGameLobby(string gameId)
     {
         var game = _roomManager.GetGame(gameId);
         if (game == null || game.Status != GameStatus.Waiting)
+        {
             return null;
+        }
 
         return MapToGameRoomInfo(game);
     }
 
     /// <summary>
-    /// Get games a user created or is in.
+    /// Get games a user created or is participating in.
     /// </summary>
     public List<GameRoomInfo> GetUserGames(string userId)
     {
-        var games = _roomManager.GetAllGames()
+        return _roomManager.GetAllGames()
             .Where(g => g.HostId == userId || g.Players.Any(p => p.Id == userId))
-            .Select(g => MapToGameRoomInfo(g))
+            .Select(MapToGameRoomInfo)
             .ToList();
-
-        return games;
     }
 
     /// <summary>
-    /// Get game room info with player details.
+    /// Maps a GameState to its lobby-facing DTO.
     /// </summary>
-    private GameRoomInfo MapToGameRoomInfo(GameState game)
+    private static GameRoomInfo MapToGameRoomInfo(GameState game)
     {
         var hostPlayer = game.Players.FirstOrDefault(p => p.Id == game.HostId);
 

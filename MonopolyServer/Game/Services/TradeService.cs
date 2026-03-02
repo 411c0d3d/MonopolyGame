@@ -28,24 +28,22 @@ public class TradeService
     /// </summary>
     public TradeOffer? ProposeTrade(string gameId, string fromPlayerId, string toPlayerId, TradeOffer tradeOffer)
     {
-        var game = _roomManager.GetGame(gameId);
-        var engine = _roomManager.GetGameEngine(gameId);
-
-        if (game == null || engine == null)
-        {
-            return null;
-        }
-
         tradeOffer.FromPlayerId = fromPlayerId;
         tradeOffer.ToPlayerId = toPlayerId;
 
-        var result = engine.ProposeTrade(tradeOffer);
-        if (result != null)
+        TradeOffer? result = null;
+
+        _roomManager.MutateGame(gameId, (game, engine) =>
         {
-            var fromPlayer = game.GetPlayerById(fromPlayerId);
-            var toPlayer = game.GetPlayerById(toPlayerId);
-            _logger.LogInformation("Trade proposed: {From} -> {To}", fromPlayer?.Name, toPlayer?.Name);
-        }
+            result = engine?.ProposeTrade(tradeOffer);
+
+            if (result != null)
+            {
+                _logger.LogInformation("Trade proposed: {From} -> {To}",
+                    game.GetPlayerById(fromPlayerId)?.Name,
+                    game.GetPlayerById(toPlayerId)?.Name);
+            }
+        });
 
         return result;
     }
@@ -55,23 +53,20 @@ public class TradeService
     /// </summary>
     public bool AcceptTrade(string gameId, string tradeId, string acceptingPlayerId)
     {
-        var game = _roomManager.GetGame(gameId);
-        var engine = _roomManager.GetGameEngine(gameId);
+        bool success = false;
 
-        if (game == null || engine == null)
-            return false;
-
-        var success = engine.AcceptTrade(tradeId, acceptingPlayerId);
-        if (success)
+        _roomManager.MutateGame(gameId, (game, engine) =>
         {
-            var trade = game.PendingTrades.FirstOrDefault(t => t.Id == tradeId);
-            if (trade != null)
+            success = engine?.AcceptTrade(tradeId, acceptingPlayerId) ?? false;
+
+            if (success)
             {
-                var acceptingPlayer = game.GetPlayerById(acceptingPlayerId);
-                var proposingPlayer = game.GetPlayerById(trade.FromPlayerId);
-                _logger.LogInformation($"Trade accepted: {proposingPlayer?.Name} <-> {acceptingPlayer?.Name}");
+                var trade = game.PendingTrades.FirstOrDefault(t => t.Id == tradeId);
+                _logger.LogInformation("Trade accepted: {Proposing} <-> {Accepting}",
+                    trade != null ? game.GetPlayerById(trade.FromPlayerId)?.Name : "unknown",
+                    game.GetPlayerById(acceptingPlayerId)?.Name);
             }
-        }
+        });
 
         return success;
     }
@@ -81,23 +76,20 @@ public class TradeService
     /// </summary>
     public bool RejectTrade(string gameId, string tradeId, string rejectingPlayerId)
     {
-        var game = _roomManager.GetGame(gameId);
-        var engine = _roomManager.GetGameEngine(gameId);
+        bool success = false;
 
-        if (game == null || engine == null)
-            return false;
-
-        var success = engine.RejectTrade(tradeId, rejectingPlayerId);
-        if (success)
+        _roomManager.MutateGame(gameId, (game, engine) =>
         {
             var trade = game.PendingTrades.FirstOrDefault(t => t.Id == tradeId);
-            if (trade != null)
+            success = engine?.RejectTrade(tradeId, rejectingPlayerId) ?? false;
+
+            if (success)
             {
-                var rejectingPlayer = game.GetPlayerById(rejectingPlayerId);
-                var proposingPlayer = game.GetPlayerById(trade.FromPlayerId);
-                _logger.LogInformation($"Trade rejected: {proposingPlayer?.Name} <- {rejectingPlayer?.Name}");
+                _logger.LogInformation("Trade rejected: {Proposing} <- {Rejecting}",
+                    trade != null ? game.GetPlayerById(trade.FromPlayerId)?.Name : "unknown",
+                    game.GetPlayerById(rejectingPlayerId)?.Name);
             }
-        }
+        });
 
         return success;
     }
@@ -107,22 +99,18 @@ public class TradeService
     /// </summary>
     public bool CancelTrade(string gameId, string tradeId, string cancelingPlayerId)
     {
-        var game = _roomManager.GetGame(gameId);
-        var engine = _roomManager.GetGameEngine(gameId);
+        bool success = false;
 
-        if (game == null || engine == null)
-            return false;
-
-        var success = engine.CancelTrade(tradeId, cancelingPlayerId);
-        if (success)
+        _roomManager.MutateGame(gameId, (game, engine) =>
         {
-            var trade = game.PendingTrades.FirstOrDefault(t => t.Id == tradeId);
-            if (trade != null)
+            success = engine?.CancelTrade(tradeId, cancelingPlayerId) ?? false;
+
+            if (success)
             {
-                var cancelingPlayer = game.GetPlayerById(cancelingPlayerId);
-                _logger.LogInformation($"Trade cancelled: {cancelingPlayer?.Name}");
+                _logger.LogInformation("Trade cancelled by {Player}",
+                    game.GetPlayerById(cancelingPlayerId)?.Name);
             }
-        }
+        });
 
         return success;
     }
@@ -142,7 +130,7 @@ public class TradeService
     public List<TradeOffer> GetPendingTrades(string gameId)
     {
         var game = _roomManager.GetGame(gameId);
-        return game?.PendingTrades.Where(t => t.Status == TradeStatus.Pending).ToList() ?? new();
+        return game?.PendingTrades.Where(t => t.Status == TradeStatus.Pending).ToList() ?? [];
     }
 
     /// <summary>
@@ -153,6 +141,6 @@ public class TradeService
         var game = _roomManager.GetGame(gameId);
         return game?.PendingTrades
             .Where(t => t.ToPlayerId == playerId && t.Status == TradeStatus.Pending)
-            .ToList() ?? new();
+            .ToList() ?? [];
     }
 }

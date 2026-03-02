@@ -188,11 +188,11 @@ without explicit synchronisation.
 
 ### Decision — Single Lock Per Manager
 
-All reads that feed a mutation, and all mutations themselves, are performed inside a single `object _lock`. The lock is
-held only for the duration of the state operation, never across an `await`.
+All reads that feed a mutation, and all mutations themselves, are performed inside a single `Lock _lock`. The lock is
+held only for the duration of the state operation, never across an `await`. A separate `ConcurrentDictionary<string, SemaphoreSlim>` (`_saveLocks`) serialises concurrent disk writes per game — it is exclusively for I/O and is never used for in-memory mutation.
 
 ```csharp
-private readonly object _lock = new();
+private readonly Lock _lock = new();
 private readonly Dictionary<string, GameState>  _games   = new();
 private readonly Dictionary<string, GameEngine> _engines = new();
 
@@ -206,10 +206,15 @@ public string CreateGame()
     }
 }
 
-public (GameState state, GameEngine engine) GetGameAndEngine(string gameId)
+public bool MutateGame(string gameId, Action<GameState, GameEngine?> mutator)
 {
     lock (_lock)
-        return (_games[gameId], _engines[gameId]);
+    {
+        if (!_games.TryGetValue(gameId, out var game)) { return false; }
+        _engines.TryGetValue(gameId, out var engine);
+        mutator(game, engine);
+        return true;
+    }
 }
 ```
 
@@ -226,9 +231,8 @@ cap, contention is negligible.
 Broadcasts must never happen inside the lock. The consistent pattern throughout the hub is:
 
 ```csharp
-// 1. Mutate under lock, capture what we need
-GameState state;
-lock (_lock) { state = rooms.Mutate(gameId, ...); }
+// 1. Mutate under lock via MutateGame
+_rooms.MutateGame(gameId, (state, engine) => { engine?.SomeAction(); });
 
 // 2. Broadcast after lock is released
 await Clients.Group(gameId).SendAsync("GameStateUpdated", mapper.ToDto(state));
@@ -239,29 +243,27 @@ the same lock.
 
 ### Cleanup Routine
 
-A `BackgroundService` runs on a 60-second interval and purges stale rooms. It handles two cases: `Finished` games older
-than 30 seconds, and `Waiting` rooms with no players remaining.
+A `BackgroundService` runs on a 60-second interval and purges stale rooms. It handles abandoned games (0 players for
+over 1 hour), finished games older than 7 days, and disconnected players offline for more than 10 minutes.
 
 ```csharp
-public class GameCleanupService(GameRoomManager rooms, ILogger<GameCleanupService> log)
+public class GameCleanupService(IServiceProvider serviceProvider, ILogger<GameCleanupService> log)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            await Task.Delay(TimeSpan.FromSeconds(60), ct);
-
-            var purged = rooms.PurgeExpiredGames();
-            if (purged > 0)
-                log.LogInformation("Cleanup purged {Count} expired games", purged);
+            await Task.Delay(TimeSpan.FromMinutes(GameConstants.CleanupIntervalMinutes), ct);
+            await PerformCleanup();
         }
     }
 }
 ```
 
-`PurgeExpiredGames()` runs entirely inside `_lock`, iterating the dictionary once and removing qualifying entries in a
-single pass. It returns the purge count for log observability.
+All mutations during cleanup are routed through `MutateGame` to guarantee they run under `_lock`, eliminating races
+between the background thread and concurrent hub invocations. `VacuumStorage(predicate)` handles bulk removal of games
+matching a condition — used on startup to purge all finished games and during periodic cleanup for abandoned rooms.
 
 ---
 
@@ -280,25 +282,26 @@ single pass. It returns the purge count for log observability.
 ```csharp
 public async Task RollDice(string gameId)
 {
-    var (state, engine) = _rooms.GetGameAndEngine(gameId);
+    var state = _rooms.GetGame(gameId);
 
-    if (state.GetCurrentPlayer()?.ConnectionId != Context.ConnectionId)
+    if (state?.GetCurrentPlayer()?.ConnectionId != Context.ConnectionId)
         throw new HubException("Not your turn");
 
-    engine.RollDice(state);
+    _rooms.MutateGame(gameId, (s, engine) => engine?.RollDice());
 
     await Clients.Group(gameId).SendAsync("GameStateUpdated", _mapper.ToDto(state));
     await Clients.Group(gameId).SendAsync("DiceRolled", state.LastDiceRoll.D1, state.LastDiceRoll.D2);
 }
 ```
 
-**Invariant:** The hub never calls `GameEngine` directly. All access goes through `GameRoomManager`, which owns `_lock`.
-The engine is always invoked from within a manager method that already holds the lock.
+**Invariant:** The hub never calls `GameEngine` directly. All mutations go through `MutateGame` or `ExecuteWithEngine`
+on `GameRoomManager`, which own `_lock`. The engine is always invoked from within a manager method that already holds
+the lock.
 
 ### Hub Groups
 
 Each game is a SignalR group keyed by `gameId`. Players join the group on `JoinGame` and leave on `LeaveGame` or
-disconnect. `OnDisconnectedAsync` finds the player's game by `ConnectionId` and resigns them if the game is in progress.
+disconnect. `OnDisconnectedAsync` finds the player's game by `playerId` and resigns them if the game is in progress.
 
 ```csharp
 // Join
@@ -311,7 +314,7 @@ await Groups.RemoveFromGroupAsync(Context.ConnectionId, gameId);
 ```csharp
 public override async Task OnDisconnectedAsync(Exception? ex)
 {
-    var game = _rooms.GetGameByConnectionId(Context.ConnectionId);
+    var game = _rooms.GetGameByPlayerId(playerId);
     if (game is not null)
         await HandlePlayerDisconnect(game.GameId);
 
@@ -497,7 +500,7 @@ purely presentational: dice animation phase, open modals, selected trade target.
 ```
 User clicks Roll
   → gameHub.call('RollDice', gameId)
-      → Hub validates turn, delegates to engine, engine mutates GameState
+      → Hub validates turn, delegates to engine via MutateGame, engine mutates GameState
           → Hub broadcasts GameStateUpdated + DiceRolled to group
               → settleDice([d1, d2])  starts / queues animation
               → setGameState(dto)     triggers React re-render
@@ -515,22 +518,23 @@ snapping before the visual completes.
 
 Thread-safe singleton. Single source of truth for all active game instances.
 
-| Method                          | Description                                              |
-|---------------------------------|----------------------------------------------------------|
-| `CreateGame()`                  | Generate 8-char ID, create `GameState`, return ID        |
-| `GetGame(gameId)`               | Fetch `GameState`                                        |
-| `GetGameEngine(gameId)`         | Fetch engine for active game                             |
-| `SetGameEngine(gameId, engine)` | Store engine when game starts                            |
-| `GetGameAndEngine(gameId)`      | Fetch both atomically under single lock                  |
-| `GetGameByConnectionId(connId)` | Find game for disconnect handling                        |
-| `DeleteGame(gameId)`            | Remove game and engine                                   |
-| `PurgeExpiredGames()`           | Remove stale rooms; called by cleanup routine            |
-| `GetStats()`                    | Diagnostics — total, in-progress, waiting, player counts |
+| Method                              | Description                                                        |
+|-------------------------------------|--------------------------------------------------------------------|
+| `CreateGame()`                      | Generate 8-char ID, create `GameState`, return ID                  |
+| `GetGame(gameId)`                   | Fetch `GameState`                                                  |
+| `GetGameEngine(gameId)`             | Fetch engine for active game                                       |
+| `SetGameEngine(gameId, engine)`     | Store engine when game starts                                      |
+| `MutateGame(gameId, mutator)`       | Mutate game state and engine atomically under `_lock`              |
+| `ExecuteWithEngine(gameId, action)` | Mutate when engine presence is required; delegates to `MutateGame` |
+| `GetGameByPlayerId(playerId)`       | Find game for disconnect handling                                  |
+| `DeleteGame(gameId)`                | Remove game, engine, save lock, and disk file                      |
+| `VacuumStorage(predicate)`          | Bulk-remove games matching a condition; cleans memory and disk     |
+| `GetStats()`                        | Diagnostics — total, in-progress, waiting, player counts           |
 
 ### TradeService
 
 Decoupled from SignalR entirely — no hub references, independently testable. Wraps engine trade calls with
-pre-validation and structured logging.
+pre-validation and structured logging. All mutations route through `MutateGame`.
 
 | Method                                        | Returns                                |
 |-----------------------------------------------|----------------------------------------|
@@ -545,12 +549,12 @@ pre-validation and structured logging.
 
 Handles all pre-game room lifecycle operations, decoupled from the hub transport layer.
 
-| Method                              | Description                                         |
-|-------------------------------------|-----------------------------------------------------|
-| `CreateRoom(playerName, connId)`    | Initialise room, assign host                        |
-| `JoinRoom(gameId, playerName, connId)` | Validate and add player to waiting room          |
-| `LeaveRoom(gameId, playerId)`       | Remove player; promote new host if needed           |
-| `GetAvailableRooms()`               | Returns joinable rooms                              |
+| Method                                    | Description                              |
+|-------------------------------------------|------------------------------------------|
+| `CreateRoom(playerName, connId)`          | Initialise room, assign host             |
+| `JoinRoom(gameId, playerName, connId)`    | Validate and add player to waiting room  |
+| `LeaveRoom(gameId, playerId)`             | Remove player; promote new host if needed|
+| `GetAvailableRooms()`                     | Returns joinable rooms                   |
 
 ### TurnTimerService
 
@@ -572,8 +576,8 @@ app.MapHub<AdminHub>("/adminhub");
 ```
 
 Singletons are safe because all mutation is gated by `_lock` inside `GameRoomManager`. `GameCleanupService` receives
-`GameRoomManager` via constructor injection and runs the purge on a background timer without any additional
-synchronisation needed.
+`GameRoomManager` via constructor injection and routes all cleanup mutations through `MutateGame` on a background timer
+without any additional synchronisation needed.
 
 ---
 
@@ -616,7 +620,7 @@ room after 30 s.
 **Leaving during lobby** — Player removed → if host left, `player[0]` promoted → `HostChanged` broadcast. Last player
 leaves → room deleted immediately.
 
-**Disconnect mid-game** — `OnDisconnectedAsync` finds game by `ConnectionId` → player bankrupted → properties reclaimed
+**Disconnect mid-game** — `OnDisconnectedAsync` finds game by `playerId` → player bankrupted → properties reclaimed
 by bank → pending trades cancelled → `GameStateUpdated` broadcast to remaining players.
 
 **Reconnect** — `withAutomaticReconnect()` restores transport → client's `Reconnected` handler calls `JoinGame` → hub
@@ -669,7 +673,7 @@ re-adds connection to the group and sends current `GameStateDto` directly to tha
 | **Persistence**  | JSON file I/O, isolated from engine and hub           |
 | **React**        | Presentational — server is the single source of truth |
 
-- Hub never calls `GameEngine` directly — always via `GameRoomManager`
+- Hub never calls `GameEngine` directly — always via `MutateGame` or `ExecuteWithEngine` on `GameRoomManager`
 - State mutations only happen inside `_lock`
 - Broadcasts happen after the lock is released, never inside it
 - React components always return their unsubscribe functions from `useEffect`

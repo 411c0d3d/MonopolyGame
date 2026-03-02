@@ -21,15 +21,26 @@ public class TurnTimerService : BackgroundService
     private readonly TimeSpan _autoRollThreshold = TimeSpan.FromSeconds(90);
     private readonly TimeSpan _turnTimeLimit = TimeSpan.FromMinutes(2);
 
-    /// <summary> Tracks which game+turn combos have already received a roll warning, to avoid repeat toasts. </summary>
+    /// <summary>
+    /// Tracks which game+turn combos have already received a roll warning, to avoid repeat toasts.
+    /// </summary>
     private readonly HashSet<string> _warnedTurns = new();
 
     /// <summary>
-    /// Constructor with dependency injection of GameRoomManager for accessing game state, IHubContext for sending SignalR messages, and ILogger for logging turn timer actions.
+    /// Outcome of evaluating a single game's timer state.
     /// </summary>
-    /// <param name="roomManager">The Game Room Manager.</param>
-    /// <param name="hubContext">The Hub Context.</param>
-    /// <param name="logger">The Logger.</param>
+    private enum TurnTimerAction
+    {
+        None,
+        InitializeTurn,
+        WarnPlayer,
+        AutoRoll,
+        ForceSkip
+    }
+
+    /// <summary>
+    /// Constructor with dependency injection of GameRoomManager, IHubContext, and ILogger.
+    /// </summary>
     public TurnTimerService(
         GameRoomManager roomManager,
         IHubContext<GameHub> hubContext,
@@ -41,9 +52,8 @@ public class TurnTimerService : BackgroundService
     }
 
     /// <summary>
-    /// Main loop that runs until the service is stopped. Periodically checks all active games for turn timeouts and takes appropriate actions (warn, auto-roll, skip).
+    /// Main loop — periodically checks all active games for turn timeouts until the service stops.
     /// </summary>
-    /// <param name="stoppingToken">The Cancellation Token</param>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Turn timer service started");
@@ -66,126 +76,141 @@ public class TurnTimerService : BackgroundService
     }
 
     /// <summary>
-    /// Checks all active games: initialises turn start time, sends a roll warning at 1 min,
-    /// auto-rolls at 90 s, and force-skips the turn at 2 min.
+    /// Checks all in-progress games: initializes turn start time, warns at 1 min,
+    /// auto-rolls at 90 s, and force-skips at 2 min.
+    /// State mutations run inside ExecuteWithEngine (under lock); async I/O runs after.
     /// </summary>
     private async Task CheckTurnTimeouts()
     {
-        var games = _roomManager.GetAllGames()
-            .Where(g => g.Status == GameStatus.InProgress)
-            .ToList();
+        var gameIds = _roomManager.GetAllGameIds();
+        var activeTurnKeys = new HashSet<string>();
 
-        foreach (var game in games)
+        foreach (var gameId in gameIds)
         {
-            var currentPlayer = game.GetCurrentPlayer();
-            if (currentPlayer == null)
+            TurnTimerAction action = TurnTimerAction.None;
+            string? playerName = null;
+            string? playerId = null;
+            string? connectionId = null;
+            bool needsSave = false;
+
+            _roomManager.ExecuteWithEngine(gameId, (game, engine) =>
             {
-                continue;
-            }
-
-            if (game.CurrentTurnStartedAt == null)
-            {
-                game.CurrentTurnStartedAt = DateTime.UtcNow;
-                await _roomManager.SaveGameAsync(game.GameId);
-                continue;
-            }
-
-            var elapsed = DateTime.UtcNow - game.CurrentTurnStartedAt.Value;
-            var turnKey = $"{game.GameId}:{game.Turn}";
-            var hasRolled = currentPlayer.HasRolledDice;
-
-            // ── 2 min: skip turn ─────────────────────────────────────────────────
-            if (elapsed > _turnTimeLimit)
-            {
-                _warnedTurns.Remove(turnKey);
-                await ForceSkipTurn(game, currentPlayer);
-                continue;
-            }
-
-            // ── 90 s: auto-roll if still hasn't rolled ───────────────────────────
-            if (elapsed >= _autoRollThreshold && !hasRolled)
-            {
-                await AutoRollDice(game, currentPlayer);
-                continue;
-            }
-
-            // ── 60 s: warn once if still hasn't rolled ───────────────────────────
-            if (elapsed >= _warnThreshold && !hasRolled && !_warnedTurns.Contains(turnKey))
-            {
-                _warnedTurns.Add(turnKey);
-
-                if (currentPlayer.ConnectionId != null)
+                if (game.Status != GameStatus.InProgress)
                 {
-                    await _hubContext.Clients.Client(currentPlayer.ConnectionId).SendAsync(
-                        "TurnWarning",
-                        new { message = "You haven't rolled yet — 30 seconds left before auto-roll!" });
+                    return;
                 }
+
+                var currentPlayer = game.GetCurrentPlayer();
+                if (currentPlayer == null)
+                {
+                    return;
+                }
+
+                var turnKey = $"{game.GameId}:{game.Turn}";
+                activeTurnKeys.Add(turnKey);
+
+                playerName = currentPlayer.Name;
+                playerId = currentPlayer.Id;
+                connectionId = currentPlayer.ConnectionId;
+
+                if (game.CurrentTurnStartedAt == null)
+                {
+                    game.CurrentTurnStartedAt = DateTime.UtcNow;
+                    action = TurnTimerAction.InitializeTurn;
+                    needsSave = true;
+                    return;
+                }
+
+                var elapsed = DateTime.UtcNow - game.CurrentTurnStartedAt.Value;
+
+                if (elapsed > _turnTimeLimit)
+                {
+                    game.LogAction($"{currentPlayer.Name}'s turn timed out and was skipped.");
+                    engine.NextTurn();
+                    _warnedTurns.Remove(turnKey);
+                    action = TurnTimerAction.ForceSkip;
+                    needsSave = true;
+                    return;
+                }
+
+                if (elapsed >= _autoRollThreshold && !currentPlayer.HasRolledDice)
+                {
+                    game.LogAction($"{currentPlayer.Name}'s dice were auto-rolled due to inactivity.");
+                    var (_, _, total, _, sentToJail) = engine.RollDice();
+
+                    if (sentToJail)
+                    {
+                        engine.NextTurn();
+                    }
+                    else
+                    {
+                        engine.MovePlayer(total);
+                    }
+
+                    action = TurnTimerAction.AutoRoll;
+                    needsSave = true;
+                    return;
+                }
+
+                if (elapsed >= _warnThreshold && !currentPlayer.HasRolledDice && !_warnedTurns.Contains(turnKey))
+                {
+                    _warnedTurns.Add(turnKey);
+                    action = TurnTimerAction.WarnPlayer;
+                }
+            });
+
+            // Async work (save + SignalR) happens outside the lock.
+            if (needsSave)
+            {
+                await _roomManager.SaveGameAsync(gameId);
+            }
+
+            switch (action)
+            {
+                case TurnTimerAction.ForceSkip:
+                    _logger.LogWarning("Turn timeout for {PlayerName} in game {GameId}", playerName, gameId);
+
+                    await _hubContext.Clients.Group(gameId).SendAsync(
+                        "TurnTimeout",
+                        new { playerId, playerName });
+
+                    await _hubContext.Clients.Group(gameId).SendAsync(
+                        "GameStateUpdated",
+                        await BuildGameStateDtoAsync(gameId));
+                    break;
+
+                case TurnTimerAction.AutoRoll:
+                    _logger.LogInformation("Auto-rolled dice for {PlayerName} in game {GameId}", playerName, gameId);
+
+                    await _hubContext.Clients.Group(gameId).SendAsync(
+                        "GameStateUpdated",
+                        await BuildGameStateDtoAsync(gameId));
+                    break;
+
+                case TurnTimerAction.WarnPlayer:
+                    if (connectionId != null)
+                    {
+                        await _hubContext.Clients.Client(connectionId).SendAsync(
+                            "TurnWarning",
+                            new { message = "You haven't rolled yet — 30 seconds left before auto-roll!" });
+                    }
+
+                    break;
             }
         }
+
+        // Prune stale warned-turn keys — any entry not seen in this cycle belongs to a finished or deleted game.
+        _warnedTurns.IntersectWith(activeTurnKeys);
     }
 
     /// <summary>
-    /// Auto-rolls and moves the current player, then broadcasts updated state.
+    /// Reads the current game state under lock and maps it to a DTO for broadcast.
     /// </summary>
-    private async Task AutoRollDice(GameState game, Player currentPlayer)
+    private Task<object> BuildGameStateDtoAsync(string gameId)
     {
-        var engine = _roomManager.GetGameEngine(game.GameId);
-        if (engine == null)
-        {
-            return;
-        }
-
-        _logger.LogInformation(
-            "Auto-rolling dice for {PlayerName} in game {GameId}",
-            currentPlayer.Name, game.GameId);
-
-        game.LogAction($"{currentPlayer.Name}'s dice were auto-rolled due to inactivity.");
-
-        var (_, _, total, _, sentToJail) = engine.RollDice();
-
-        if (sentToJail)
-        {
-            engine.NextTurn();
-        }
-        else
-        {
-            engine.MovePlayer(total);
-        }
-
-        await _roomManager.SaveGameAsync(game.GameId);
-
-        await _hubContext.Clients.Group(game.GameId).SendAsync(
-            "GameStateUpdated",
-            GameStateMapper.ToDto(game));
-    }
-
-    /// <summary>
-    /// Forces the current turn to end and broadcasts the new state.
-    /// </summary>
-    private async Task ForceSkipTurn(GameState game,
-        Player currentPlayer)
-    {
-        var engine = _roomManager.GetGameEngine(game.GameId);
-        if (engine == null)
-        {
-            return;
-        }
-
-        _logger.LogWarning(
-            "Turn timeout for {PlayerName} in game {GameId}",
-            currentPlayer.Name, game.GameId);
-
-        game.LogAction($"{currentPlayer.Name}'s turn timed out and was skipped.");
-        engine.NextTurn();
-        await _roomManager.SaveGameAsync(game.GameId);
-
-        await _hubContext.Clients.Group(game.GameId).SendAsync(
-            "TurnTimeout",
-            new { playerId = currentPlayer.Id, playerName = currentPlayer.Name });
-
-        // Broadcast updated state so all clients advance to the new player's turn
-        await _hubContext.Clients.Group(game.GameId).SendAsync(
-            "GameStateUpdated",
-            GameStateMapper.ToDto(game));
+        // GetGame returns a live reference; we only read it here for mapping — no mutation.
+        var game = _roomManager.GetGame(gameId);
+        var dto = game != null ? GameStateMapper.ToDto(game) : (object)new { gameId };
+        return Task.FromResult(dto);
     }
 }

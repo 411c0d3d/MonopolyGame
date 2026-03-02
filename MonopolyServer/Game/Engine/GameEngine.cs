@@ -288,7 +288,7 @@ public class GameEngine
     /// </summary>
     private void HandleTax(Player player, Property space)
     {
-        int taxAmount = space.Name.Contains("Income") ? 200 : 100;
+        int taxAmount = space.Name.Contains("Income") ? GameConstants.IncomeTax : GameConstants.LuxuryTax;
 
         if (player.Cash >= taxAmount)
         {
@@ -539,7 +539,7 @@ public class GameEngine
         switch (card.Type)
         {
             case CardType.MoveToGo:
-                player.Position = 0;
+                player.Position = GameConstants.GoPosition;
                 player.AddCash(Constants.GameConstants.GoPassingBonus);
                 _state.LogAction($"{player.Name} moved to Go and collected $200.");
                 break;
@@ -549,7 +549,7 @@ public class GameEngine
                 break;
 
             case CardType.MoveToJustVisiting:
-                player.Position = 10; // Jail position, but just visiting
+                player.Position = GameConstants.JailPosition; // Jail position, but just visiting
                 _state.LogAction($"{player.Name} moved to Jail (just visiting).");
                 break;
 

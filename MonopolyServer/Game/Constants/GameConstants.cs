@@ -29,6 +29,8 @@ public static class GameConstants
     public const int BoardSize = 40;
     public const int GoPosition = 0;
     public const int GoPassingBonus = 200;
+    public const int IncomeTax = 200;
+    public const int LuxuryTax = 100;
 
     // Game Room Configuration
     public const int GameIdLength = 8;
