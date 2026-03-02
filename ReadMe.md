@@ -29,7 +29,7 @@ A full-featured multiplayer Monopoly game built with ASP.NET Core 10, SignalR, a
 |-------|------------|
 | Server | ASP.NET Core 10 |
 | Real-time transport | SignalR |
-| Client | React (no bundler — plain script tags via index.html) |
+| Client | React over Razor (no bundler — plain script tags via index.html) |
 | State | In-memory (`Dictionary<string, GameState>`) with JSON file persistence for recovery |
 | Serialisation | Strongly-typed DTOs, System.Text.Json |
 
@@ -40,8 +40,8 @@ A full-featured multiplayer Monopoly game built with ASP.NET Core 10, SignalR, a
 **Requirements:** .NET 10 SDK
 
 ```bash
-git clone https://github.com/your-org/monopoly-online
-cd monopoly-online
+git clone https://github.com/411c0d3d/MonopolyGame
+cd MonopolyGame
 dotnet run --project MonopolyServer
 ```
 
