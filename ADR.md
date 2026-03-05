@@ -4,8 +4,9 @@
 
 Multiplayer Monopoly built on ASP.NET Core 10 with a SignalR hub and a React client served through a static HTML shell.
 Complete game engine covering all classic rules — card system, trading, jail, rent, and buildings. Active game state is
-held in memory for performance and additionally persisted to JSON for recovery across restarts. No database, no auctions,
-no admin privilege creep.
+held in memory for performance and additionally persisted via a swappable repository layer — either JSON files for local
+development or Azure Cosmos DB for production. Authentication is handled by Microsoft Entra External ID with social
+login (Google, Microsoft). Admin access is enforced by role claim, not a plain-text key.
 
 ---
 
@@ -52,12 +53,28 @@ MonopolyServer/
 │   ├── TradeService.cs              # Trade orchestration, decoupled from SignalR
 │   └── TurnTimerService.cs          # Per-game timer, auto-advance on idle
 ├── Hubs/
-│   ├── AdminHub.cs                  # Admin diagnostics and server health
+│   ├── AdminHub.cs                  # Admin diagnostics — requires Admin role claim
 │   └── GameHub.cs                   # SignalR hub — validate · delegate · broadcast only
 ├── Infrastructure/
+│   ├── Auth/
+│   │   ├── AzureAdSettings.cs       # Typed config for Entra External ID
+│   │   ├── CosmosUserRepository.cs  # Cosmos user persistence
+│   │   ├── IUserRepository.cs       # User persistence contract
+│   │   ├── UserClaimsTransformation.cs  # Enriches principal with Admin role from Cosmos
+│   │   └── UserDocument.cs          # Cosmos user document (id = B2C objectId)
+│   ├── Cosmos/
+│   │   ├── CosmosGameRepository.cs  # Cosmos DB game persistence (v3 SDK)
+│   │   ├── CosmosSettings.cs        # Typed config for Cosmos connection
+│   │   ├── GameDocument.cs          # Cosmos document wrapper for GameState
+│   │   └── StjCosmosSerializer.cs   # STJ-backed CosmosSerializer
+│   ├── Persistence/
+│   │   ├── FileGameRepository.cs    # File system game persistence
+│   │   └── IGameRepository.cs       # Game persistence contract
+│   ├── AuthServiceExtensions.cs     # DI wiring — auth, JWT, authorization
 │   ├── GameCleanupService.cs        # BackgroundService — purges stale rooms every 60 s
 │   ├── GameStateMapper.cs           # Maps GameState → GameStateDto
 │   ├── InputValidator.cs            # Shared input guard helpers
+│   ├── PersistenceServiceExtensions.cs  # DI wiring — persistence and game services
 │   └── RateLimitingFilter.cs        # Per-connection rate limiting
 ├── Tests/
 ├── appsettings.json
@@ -117,7 +134,7 @@ Dumb containers. No business logic lives in models.
 Getters only: `GetCurrentPlayer()` · `GetPlayerById()` · `LogAction()`
 
 **Player** — per-player state  
-`Id` · `Name` · `Cash` · `Position` · `IsInJail` · `JailTurnsRemaining` · `KeptCards` · `IsBankrupt` ·
+`Id` (B2C objectId for authenticated players, GUID for bots) · `Name` · `Cash` · `Position` · `IsInJail` · `JailTurnsRemaining` · `KeptCards` · `IsBankrupt` ·
 `IsCurrentPlayer` · `HasRolledDice`  
 Mutations only: `AddCash()` · `DeductCash()` · `MoveTo()` · `SendToJail()`
 
@@ -167,14 +184,101 @@ are held by the player and returned to the deck bottom on use. Deck reshuffles i
 
 ## Data Layer
 
-Active game state is held in memory (`Dictionary<string, GameState>`) for low-latency reads and writes during play. State
-is additionally persisted to JSON via file I/O, allowing the server to recover in-progress games across restarts without
-a database dependency. Writes are scoped to meaningful transitions (game start, turn end, state change) rather than every
-mutation, keeping I/O overhead negligible.
+Active game state is held in memory (`Dictionary<string, GameState>`) for low-latency reads and writes during play.
+State is additionally persisted via `IGameRepository` — a swappable persistence contract with two implementations.
 
-The persistence layer is isolated from the engine. `GameRoomManager` owns the write path; the engine has no knowledge of
-storage. Replacing file-backed JSON with a full database backend requires only a new `IGameStateStore` implementation
-without touching engine or hub code.
+**`FileGameRepository`** — JSON file per game, stored under `/data/games/`. Per-game `SemaphoreSlim` locks serialise
+concurrent writes. Used in local development and as a zero-dependency fallback.
+
+**`CosmosGameRepository`** — Azure Cosmos DB (v3 SDK), SQL API, partition key `/id`. GameState is stored as a proper
+nested JSON document via a custom `StjCosmosSerializer` wired into `CosmosClientOptions`, eliminating any Newtonsoft
+dependency. `CosmosClient` is registered as a singleton and shared between the game and user repositories.
+
+**`IUserRepository`** / **`CosmosUserRepository`** — users container, partition key `/id` (B2C objectId). Stores
+`UserDocument` (objectId, email, displayName, isAdmin, timestamps). Created alongside the games container at startup.
+
+The active implementation is selected via `PersistenceSettings:UseDatabase` in configuration — `false` uses
+`FileGameRepository`, `true` uses `CosmosGameRepository`. Switching backends requires no changes to engine or hub code.
+
+### Startup Ordering
+
+```
+GameRoomManager.InitializeAsync()   ← awaited before app.RunAsync()
+  ↓ loads all persisted games
+  ↓ creates GameEngine for each InProgress game
+app.RunAsync()
+  ↓ hosted services start (GameCleanupService, TurnTimerService)
+```
+
+`InitializeAsync` must complete before hosted services fire. If `GameCleanupService` runs before games are loaded
+it vacuums an empty dictionary — a latent race condition that was present in the original design and is now eliminated
+by explicit sequencing in `Program.cs`.
+
+### Secrets Management
+
+```
+appsettings.json              (placeholders only, committed)
+appsettings.Development.json  (non-secret dev defaults, committed)
+User Secrets                  (real credentials, never committed)
+Azure App Service Settings    (production override)
+```
+
+`.env` files were retired in favour of ASP.NET Core User Secrets, which store values outside the project directory and
+integrate natively with `IConfiguration`.
+
+---
+
+## Authentication
+
+### Decision
+
+Plain-text `AdminKey` parameter validation on every admin hub method was retired. Authentication is handled by
+Microsoft Entra External ID (the CIAM successor to Azure AD B2C) with JWT bearer tokens validated server-side.
+Admin access is a role claim derived from a `UserDocument` in Cosmos, not a shared secret.
+
+### Player Identity
+
+`Player.Id` is the B2C objectId — a persistent, provider-independent identifier that survives reconnections, session
+changes, and social provider switches. Bots continue to use generated GUIDs.
+
+### Flow
+
+```
+Client obtains JWT from Entra External ID (Google or Microsoft social login)
+  ↓ JWT passed as ?access_token= query string on SignalR WebSocket connection
+      ↓ JwtBearerEvents.OnMessageReceived extracts token for hub paths
+          ↓ UserClaimsTransformation.TransformAsync runs on every authenticated request
+              ↓ Looks up UserDocument by objectId in Cosmos
+                  ↓ Creates document on first login
+                  ↓ Sets IsAdmin = true if email matches EntraExternalId:AdminEmail config
+                  ↓ Adds ClaimTypes.Role = "Admin" to principal if IsAdmin
+```
+
+`UserClaimsTransformation` implements `IClaimsTransformation` — ASP.NET Core calls it automatically. No explicit
+invocation is needed in hub or middleware code.
+
+### Hub Authorization
+
+```csharp
+[Authorize]                              // GameHub — any authenticated user
+[Authorize(Roles = "Admin")]             // AdminHub — Admin role claim required
+```
+
+`JoinGame` no longer accepts a `playerName` parameter — display name is extracted from claims (`name` or
+`ClaimTypes.Name`). `AdminHub` methods no longer have an `adminKey` parameter. `_configuration` is no longer injected
+into `AdminHub`.
+
+### SignalR Token Extraction
+
+Browsers cannot set `Authorization` headers on WebSocket connections. The JWT is passed as `?access_token=` in the
+query string and extracted in `JwtBearerEvents.OnMessageReceived` for paths `/game-hub` and `/admin-hub`.
+
+### Entra External ID vs Entra ID
+
+Microsoft Entra External ID is the correct product for customer-facing (CIAM) apps. Microsoft Entra ID (workforce)
+requires a paid licence and is for internal users. Azure AD B2C is no longer available for new tenants as of May 2025.
+App registrations must be created while the portal is confirmed inside the External ID tenant — registrations made in
+the Default Directory are invisible to the correct tenant.
 
 ---
 
@@ -189,22 +293,12 @@ without explicit synchronisation.
 ### Decision — Single Lock Per Manager
 
 All reads that feed a mutation, and all mutations themselves, are performed inside a single `Lock _lock`. The lock is
-held only for the duration of the state operation, never across an `await`. A separate `ConcurrentDictionary<string, SemaphoreSlim>` (`_saveLocks`) serialises concurrent disk writes per game — it is exclusively for I/O and is never used for in-memory mutation.
+held only for the duration of the state operation, never across an `await`.
 
 ```csharp
 private readonly Lock _lock = new();
 private readonly Dictionary<string, GameState>  _games   = new();
 private readonly Dictionary<string, GameEngine> _engines = new();
-
-public string CreateGame()
-{
-    lock (_lock)
-    {
-        var id = GenerateId();
-        _games[id] = new GameState(id);
-        return id;
-    }
-}
 
 public bool MutateGame(string gameId, Action<GameState, GameEngine?> mutator)
 {
@@ -218,13 +312,58 @@ public bool MutateGame(string gameId, Action<GameState, GameEngine?> mutator)
 }
 ```
 
+`MutateGame` returning `false` means the game was not found — all callers in the hubs check this return value and log
+a warning if it occurs. Silent swallowing of missing-game scenarios was a pre-existing issue now resolved.
+
 **Why not `ConcurrentDictionary`:** Individual dictionary operations would be atomic, but game actions are compound —
 read player state, validate, mutate board, write log. That entire sequence must be atomic as a unit, which
 `ConcurrentDictionary` cannot guarantee.
 
 **Why not per-game locks:** Trades span two players who may arrive from different hub invocations concurrently. A single
-manager-level lock eliminates any lock-ordering deadlock risk and is straightforward to reason about. With a four-player
+manager-level lock eliminates any lock-ordering deadlock risk and is straightforward to reason about. With an eight-player
 cap, contention is negligible.
+
+### Engine Initialisation — Atomic Create-and-Start
+
+`StartGame` originally called `GetGameEngine` (lock), then `new GameEngine(game)` (outside lock), then `SetGameEngine`
+(lock) — a check-then-act race. Two concurrent `StartGame` calls could create two engines; the second would silently
+overwrite the first. Fixed with `InitializeEngine`:
+
+```csharp
+public bool InitializeEngine(string gameId, Action<GameState, GameEngine> mutator)
+{
+    lock (_lock)
+    {
+        if (!_games.TryGetValue(gameId, out var game)) { return false; }
+        if (!_engines.TryGetValue(gameId, out var engine))
+        {
+            engine = new GameEngine(game);
+            _engines[gameId] = engine;
+        }
+        mutator(game, engine);
+        return true;
+    }
+}
+```
+
+Engine creation and the first mutation are now atomic within a single lock acquisition.
+
+### Deadlock — DeleteGame Inside MutateGame
+
+`GameCleanupService` was calling `roomManager.DeleteGame()` from inside a `MutateGame` lambda. Both methods acquire
+`_lock`. .NET 9's `System.Threading.Lock` is not reentrant — this deadlocks. Fixed with a signal pattern:
+
+```csharp
+bool shouldDelete = false;
+
+roomManager.MutateGame(gameId, (g, _) =>
+{
+    // ... evaluate state ...
+    if (conditionMet) { shouldDelete = true; return; }
+});
+
+if (shouldDelete) { roomManager.DeleteGame(gameId); }
+```
 
 ### Lock and Broadcast Pattern
 
@@ -234,8 +373,9 @@ Broadcasts must never happen inside the lock. The consistent pattern throughout 
 // 1. Mutate under lock via MutateGame
 _rooms.MutateGame(gameId, (state, engine) => { engine?.SomeAction(); });
 
-// 2. Broadcast after lock is released
-await Clients.Group(gameId).SendAsync("GameStateUpdated", mapper.ToDto(state));
+// 2. Persist and broadcast after lock is released
+await _rooms.SaveGameAsync(gameId);
+await Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
 ```
 
 Holding a lock across an `await` would starve the thread pool and risk deadlock with other hub invocations waiting on
@@ -246,24 +386,9 @@ the same lock.
 A `BackgroundService` runs on a 60-second interval and purges stale rooms. It handles abandoned games (0 players for
 over 1 hour), finished games older than 7 days, and disconnected players offline for more than 10 minutes.
 
-```csharp
-public class GameCleanupService(IServiceProvider serviceProvider, ILogger<GameCleanupService> log)
-    : BackgroundService
-{
-    protected override async Task ExecuteAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            await Task.Delay(TimeSpan.FromMinutes(GameConstants.CleanupIntervalMinutes), ct);
-            await PerformCleanup();
-        }
-    }
-}
-```
-
 All mutations during cleanup are routed through `MutateGame` to guarantee they run under `_lock`, eliminating races
-between the background thread and concurrent hub invocations. `VacuumStorage(predicate)` handles bulk removal of games
-matching a condition — used on startup to purge all finished games and during periodic cleanup for abandoned rooms.
+between the background thread and concurrent hub invocations. `VacuumStorageAsync(predicate)` fans out repository
+deletes via `Task.WhenAll` after snapshotting candidate IDs under the lock.
 
 ---
 
@@ -279,61 +404,53 @@ matching a condition — used on startup to purge all finished games and during 
 3. Broadcast — push updated GameStateDto to the SignalR group
 ```
 
+**Invariant:** The hub never calls `GameEngine` directly. All mutations go through `MutateGame`, `ExecuteWithEngine`,
+or `InitializeEngine` on `GameRoomManager`, which own `_lock`. The engine is always invoked from within a manager
+method that already holds the lock.
+
+### Hub Error Logging
+
+All hub error paths go through a `SendError` helper that logs a structured warning before sending the error to the
+client. Previously, errors were sent to the caller with nothing written server-side.
+
 ```csharp
-public async Task RollDice(string gameId)
+private async Task SendError(string method, string gameId, string message)
 {
-    var state = _rooms.GetGame(gameId);
-
-    if (state?.GetCurrentPlayer()?.ConnectionId != Context.ConnectionId)
-        throw new HubException("Not your turn");
-
-    _rooms.MutateGame(gameId, (s, engine) => engine?.RollDice());
-
-    await Clients.Group(gameId).SendAsync("GameStateUpdated", _mapper.ToDto(state));
-    await Clients.Group(gameId).SendAsync("DiceRolled", state.LastDiceRoll.D1, state.LastDiceRoll.D2);
+    _logger.LogWarning("[{Method}] {Message} — gameId={GameId} connectionId={ConnectionId}",
+        method, message, gameId, Context.ConnectionId);
+    await Clients.Caller.SendAsync("Error", message);
 }
 ```
 
-**Invariant:** The hub never calls `GameEngine` directly. All mutations go through `MutateGame` or `ExecuteWithEngine`
-on `GameRoomManager`, which own `_lock`. The engine is always invoked from within a manager method that already holds
-the lock.
+### Caller Identity
+
+Hub methods no longer resolve the calling player by `Context.ConnectionId`. They resolve by B2C objectId extracted from
+`Context.User` claims:
+
+```csharp
+private string? GetCallerObjectId() =>
+    Context.User?.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value
+    ?? Context.User?.FindFirst("oid")?.Value;
+```
 
 ### Hub Groups
 
 Each game is a SignalR group keyed by `gameId`. Players join the group on `JoinGame` and leave on `LeaveGame` or
-disconnect. `OnDisconnectedAsync` finds the player's game by `playerId` and resigns them if the game is in progress.
-
-```csharp
-// Join
-await Groups.AddToGroupAsync(Context.ConnectionId, gameId);
-
-// Leave / disconnect
-await Groups.RemoveFromGroupAsync(Context.ConnectionId, gameId);
-```
-
-```csharp
-public override async Task OnDisconnectedAsync(Exception? ex)
-{
-    var game = _rooms.GetGameByPlayerId(playerId);
-    if (game is not null)
-        await HandlePlayerDisconnect(game.GameId);
-
-    await base.OnDisconnectedAsync(ex);
-}
-```
+disconnect. `OnDisconnectedAsync` finds the player's game by objectId via `GetGameByPlayerId` and marks them
+disconnected via `MarkPlayerDisconnected` — which runs under `_lock` without holding it across any `await`.
 
 ### Hub Methods
 
 **Room management:**
 
-| Method                            | Broadcasts                                  |
-|-----------------------------------|---------------------------------------------|
-| `CreateGame(playerName)`          | `GameCreated` → creator                     |
-| `JoinGame(gameId, playerName)`    | `PlayerJoined` → room                       |
-| `LeaveGame(gameId)`               | `PlayerLeft` / `HostChanged` → room         |
-| `StartGame(gameId)` *(host only)* | `GameStarted` → room                        |
-| `GetAvailableGames()`             | Returns `List<GameRoomInfo>` to caller only |
-| `GetGameLobby(gameId)`            | Returns `GameRoomInfo` to caller only       |
+| Method                         | Broadcasts                                  |
+|--------------------------------|---------------------------------------------|
+| `CreateGame(playerName)`       | `GameCreated` → creator                     |
+| `JoinGame(gameId)`             | `PlayerJoined` → room                       |
+| `LeaveGame(gameId)`            | `PlayerLeft` / `HostChanged` → room         |
+| `StartGame(gameId)` *(host)*   | `GameStarted` → room                        |
+| `GetAvailableGames()`          | Returns `List<GameRoomInfo>` to caller only |
+| `GetGameLobby(gameId)`         | Returns `GameRoomInfo` to caller only       |
 
 **Gameplay:**
 
@@ -351,14 +468,16 @@ public override async Task OnDisconnectedAsync(Exception? ex)
 | `ProposeTrade(gameId, toId, offer)`       | `TradeProposed` → recipient only                 |
 | `RespondToTrade(gameId, tradeId, accept)` | `GameStateUpdated` → room                        |
 
-**Admin:**
+**Admin** *(requires Admin role):*
 
-| Method                         | Broadcasts                                |
-|--------------------------------|-------------------------------------------|
-| `PauseGame(gameId)`            | `GamePaused` → room                       |
-| `ResumeGame(gameId)`           | `GameResumed` → room                      |
-| `KickPlayer(gameId, playerId)` | `PlayerKicked` → room · `Kicked` → target |
-| `ForceEndGame(gameId)`         | `GameForceEnded` → room                   |
+| Method                      | Broadcasts                                |
+|-----------------------------|-------------------------------------------|
+| `PauseGame(gameId)`         | `GamePaused` → room                       |
+| `ResumeGame(gameId)`        | `GameResumed` → room                      |
+| `KickPlayer(gameId, id)`    | `PlayerKicked` → room · `Kicked` → target |
+| `ForceEndGame(gameId)`      | `GameForceEnded` → room                   |
+| `AddBotToGame(gameId, n)`   | `GameStateUpdated` → room                 |
+| `GetGameDetails(gameId)`    | `GameDetails` → caller only               |
 
 ### Hub Events — Server to Client
 
@@ -390,27 +509,6 @@ public override async Task OnDisconnectedAsync(Exception? ex)
 `index.html` is the entire static shell. It loads the React bundles as plain `<script>` tags and exposes the SignalR hub
 URL as a `window` constant. After the initial load, all UI is React — the server renders nothing further.
 
-```
-MonopolyClient/wwwroot/
-    globals.js               ← React hook aliases (useState, useEffect, …) on window
-    app.js                   ← Root component and page router
-    utils/
-        constants.js         ← SPACES, COLORS, BCOLORS — shared game data
-        hub_service.js       ← SignalR connection factory and helpers
-    animation/
-        animation.js         ← usePlayerHop, useDiceRoll, DiceTray, ChestCardPopup
-    components/
-        board.js             ← Board component with scaled cells and token overlay
-        header.js            ← Top bar — room code, player list, connection status
-        toasts.js            ← Transient notification system
-        turn_timer.js        ← Countdown display, auto-advance warning
-    pages/
-        home_page.js         ← Landing page — create or join a room
-        lobby_page.js        ← Pre-game lobby — player list, start button
-        game_page.js         ← GamePage — hub wiring, all game state, action panel
-        admin_page.js        ← Server health and diagnostics view
-```
-
 No npm build pipeline, no module bundler. Scripts are loaded in dependency order via `<script>` tags; `globals.js`
 aliases React hooks onto `window` so every file can access them without import syntax.
 
@@ -433,35 +531,22 @@ App
 ### Hub Connection — Single Shared Instance
 
 One `gameHub` object is created at app startup and reused for the page lifetime. It wraps `HubConnection`, exposes `on`
-and `call`, and reconnects automatically.
+and `call`, and reconnects automatically. The JWT is appended as `?access_token=` on the connection URL.
 
 ```js
 const gameHub = (() => {
     const conn = new signalR.HubConnectionBuilder()
-        .withUrl(window.HUB_URL)
+        .withUrl(window.HUB_URL + "?access_token=" + getToken())
         .withAutomaticReconnect()
         .build();
 
     return {
         start: () => conn.start(),
-
-        /** Subscribe to a server event. Returns an unsubscribe function. */
-        on(event, handler) {
-            conn.on(event, handler);
-            return () => conn.off(event, handler);
-        },
-
-        /** Invoke a hub method. Returns a Promise. */
-        call(method, ...args) {
-            return conn.invoke(method, ...args);
-        },
+        on(event, handler) { conn.on(event, handler); return () => conn.off(event, handler); },
+        call(method, ...args) { return conn.invoke(method, ...args); },
     };
 })();
 ```
-
-`withAutomaticReconnect()` uses exponential back-off for transient drops. The hub fires `Reconnected` on successful
-reconnect, which the client handles by calling `JoinGame` again to rejoin the SignalR group and receive a fresh
-`GameStateUpdated`.
 
 ### Event Subscription Pattern
 
@@ -472,25 +557,24 @@ double-invocations.
 ```js
 useEffect(() => {
     const unsubs = [
-        gameHub.on('GameStateUpdated', state          => setGameState(state)),
-        gameHub.on('DiceRolled',       (d1, d2)       => settleDice([d1, d2])),
-        gameHub.on('CardDrawn',        card            => setDrawnCard(card)),
-        gameHub.on('TradeProposed',    offer           => setIncomingTrade(offer)),
-        gameHub.on('GamePaused',       ()              => setPaused(true)),
-        gameHub.on('GameResumed',      ()              => setPaused(false)),
-        gameHub.on('TurnWarning',      ({ message })   => toast(`⏰ ${message}`, 'warning')),
+        gameHub.on('GameStateUpdated', state           => setGameState(state)),
+        gameHub.on('DiceRolled',       (d1, d2)        => settleDice([d1, d2])),
+        gameHub.on('CardDrawn',        card             => setDrawnCard(card)),
+        gameHub.on('TradeProposed',    offer            => setIncomingTrade(offer)),
+        gameHub.on('GamePaused',       ()               => setPaused(true)),
+        gameHub.on('GameResumed',      ()               => setPaused(false)),
+        gameHub.on('TurnWarning',      ({ message })    => toast(`⏰ ${message}`, 'warning')),
         gameHub.on('PlayerKicked',     ({ playerName }) => toast(`${playerName} was removed`)),
-        gameHub.on('GameForceEnded',   ()              => { toast('Game ended', 'error'); onLeave(); }),
-        gameHub.on('Kicked',           msg             => { toast(msg, 'error'); onLeave(); }),
-        gameHub.on('Reconnected',      ()              => gameHub.call('JoinGame', gameId, playerName)),
+        gameHub.on('GameForceEnded',   ()               => { toast('Game ended', 'error'); onLeave(); }),
+        gameHub.on('Kicked',           msg              => { toast(msg, 'error'); onLeave(); }),
+        gameHub.on('Reconnected',      ()               => gameHub.call('JoinGame', gameId)),
     ];
 
     return () => unsubs.forEach(fn => fn());
-}, [gameId, playerName]);
+}, [gameId]);
 ```
 
-Each `gameHub.on()` call returns its own teardown. Collecting them and calling each in cleanup ensures no handler leaks
-regardless of how many events a component registers.
+Note: `JoinGame` no longer receives `playerName` — the server derives it from the authenticated claims.
 
 ### State Flow — Server is Source of Truth
 
@@ -500,7 +584,7 @@ purely presentational: dice animation phase, open modals, selected trade target.
 ```
 User clicks Roll
   → gameHub.call('RollDice', gameId)
-      → Hub validates turn, delegates to engine via MutateGame, engine mutates GameState
+      → Hub validates turn via objectId claim, delegates to engine via MutateGame
           → Hub broadcasts GameStateUpdated + DiceRolled to group
               → settleDice([d1, d2])  starts / queues animation
               → setGameState(dto)     triggers React re-render
@@ -518,18 +602,21 @@ snapping before the visual completes.
 
 Thread-safe singleton. Single source of truth for all active game instances.
 
-| Method                              | Description                                                        |
-|-------------------------------------|--------------------------------------------------------------------|
-| `CreateGame()`                      | Generate 8-char ID, create `GameState`, return ID                  |
-| `GetGame(gameId)`                   | Fetch `GameState`                                                  |
-| `GetGameEngine(gameId)`             | Fetch engine for active game                                       |
-| `SetGameEngine(gameId, engine)`     | Store engine when game starts                                      |
-| `MutateGame(gameId, mutator)`       | Mutate game state and engine atomically under `_lock`              |
-| `ExecuteWithEngine(gameId, action)` | Mutate when engine presence is required; delegates to `MutateGame` |
-| `GetGameByPlayerId(playerId)`       | Find game for disconnect handling                                  |
-| `DeleteGame(gameId)`                | Remove game, engine, save lock, and disk file                      |
-| `VacuumStorage(predicate)`          | Bulk-remove games matching a condition; cleans memory and disk     |
-| `GetStats()`                        | Diagnostics — total, in-progress, waiting, player counts           |
+| Method                              | Description                                                          |
+|-------------------------------------|----------------------------------------------------------------------|
+| `CreateGame()`                      | Generate 8-char ID, create `GameState`, fire background save         |
+| `GetGame(gameId)`                   | Fetch `GameState` under lock                                         |
+| `GetGameEngine(gameId)`             | Fetch engine for active game                                         |
+| `SetGameEngine(gameId, engine)`     | Store engine when game starts                                        |
+| `MutateGame(gameId, mutator)`       | Mutate game state and engine atomically under `_lock`; returns false if not found |
+| `ExecuteWithEngine(gameId, action)` | Mutate when engine presence is required; delegates to `MutateGame`   |
+| `InitializeEngine(gameId, mutator)` | Creates engine atomically if absent, then runs mutator under lock    |
+| `GetGameByPlayerId(playerId)`       | Find game for disconnect handling                                    |
+| `MarkPlayerDisconnected(playerId)`  | Sets IsConnected=false, DisconnectedAt under lock — no async I/O    |
+| `DeleteGame(gameId)`                | Remove from memory under lock; fires background repository delete    |
+| `VacuumStorageAsync(predicate)`     | Bulk-remove games; snapshots IDs under lock, deletes fan out async  |
+| `SaveGameAsync(gameId)`             | Snapshot under lock, persist outside lock via IGameRepository        |
+| `GetStats()`                        | Diagnostics — total, in-progress, waiting, player counts             |
 
 ### TradeService
 
@@ -549,12 +636,12 @@ pre-validation and structured logging. All mutations route through `MutateGame`.
 
 Handles all pre-game room lifecycle operations, decoupled from the hub transport layer.
 
-| Method                                    | Description                              |
-|-------------------------------------------|------------------------------------------|
-| `CreateRoom(playerName, connId)`          | Initialise room, assign host             |
-| `JoinRoom(gameId, playerName, connId)`    | Validate and add player to waiting room  |
-| `LeaveRoom(gameId, playerId)`             | Remove player; promote new host if needed|
-| `GetAvailableRooms()`                     | Returns joinable rooms                   |
+| Method                                 | Description                               |
+|----------------------------------------|-------------------------------------------|
+| `CreateRoom(playerName, connId)`       | Initialise room, assign host              |
+| `JoinRoom(gameId, playerName, connId)` | Validate and add player to waiting room   |
+| `LeaveRoom(gameId, playerId)`          | Remove player; promote new host if needed |
+| `GetAvailableRooms()`                  | Returns joinable rooms                    |
 
 ### TurnTimerService
 
@@ -563,21 +650,26 @@ Manages per-game countdown timers. Fires `TurnWarning` to the current player bef
 ### Registration (Program.cs)
 
 ```csharp
-builder.Services.AddSingleton<GameRoomManager>();
+builder.Services.AddGamePersistence(builder.Configuration);   // IGameRepository + CosmosClient
+builder.Services.AddGameAuth(builder.Configuration);          // JWT, Entra, IUserRepository
+builder.Services.AddGameServices();                           // GameRoomManager, GameCleanupService
+
+builder.Services.AddSingleton<InputValidator>();
 builder.Services.AddSingleton<TradeService>();
 builder.Services.AddSingleton<LobbyService>();
-builder.Services.AddSingleton<TurnTimerService>();
-builder.Services.AddHostedService<GameCleanupService>();
+builder.Services.AddSingleton<BotDecisionEngine>();
+builder.Services.AddSingleton<BotTurnOrchestrator>();
+builder.Services.AddHostedService<TurnTimerService>();
 
-builder.Services.AddSignalR();
+app.UseAuthentication();
+app.UseAuthorization();
 
-app.MapHub<GameHub>("/gamehub");
-app.MapHub<AdminHub>("/adminhub");
+app.MapHub<GameHub>("/game-hub");
+app.MapHub<AdminHub>("/admin-hub");
+
+await app.InitializeGameManagerAsync();   // must precede RunAsync
+await app.RunAsync();
 ```
-
-Singletons are safe because all mutation is gated by `_lock` inside `GameRoomManager`. `GameCleanupService` receives
-`GameRoomManager` via constructor injection and routes all cleanup mutations through `MutateGame` on a background timer
-without any additional synchronisation needed.
 
 ---
 
@@ -589,7 +681,7 @@ All SignalR serialisation uses strongly-typed DTOs. No anonymous types, no `dyna
 entries) · `CurrentTurnStartedAt`
 
 **`PlayerDto`** — `Id` · `Name` · `Cash` · `Position` · `IsInJail` · `IsBankrupt` · `KeptCardCount` · `HasRolledDice` ·
-`IsConnected`
+`IsConnected` · `IsBot`
 
 **`PropertyDto`** — `Id` · `Name` · `Type` · `Position` · `OwnerId` · `HouseCount` · `HasHotel` · `IsMortgaged` ·
 `ColorGroup` · `PurchasePrice`
@@ -611,7 +703,7 @@ entries) · `CurrentTurnStartedAt`
 
 **Waiting** — Host creates room → players join via `JoinGame` → `PlayerJoined` broadcast to room → only host can start.
 
-**In Progress** — `StartGame` validates 2+ players → engine created and stored → status → `InProgress` → `GameStarted`
+**In Progress** — `StartGame` validates 2+ players → engine created atomically via `InitializeEngine` → status → `InProgress` → `GameStarted`
 broadcast → no further joins allowed.
 
 **Finished** — Engine detects last standing player → `EndGame(winner)` → status → `Finished` → cleanup routine removes
@@ -620,11 +712,11 @@ room after 30 s.
 **Leaving during lobby** — Player removed → if host left, `player[0]` promoted → `HostChanged` broadcast. Last player
 leaves → room deleted immediately.
 
-**Disconnect mid-game** — `OnDisconnectedAsync` finds game by `playerId` → player bankrupted → properties reclaimed
-by bank → pending trades cancelled → `GameStateUpdated` broadcast to remaining players.
+**Disconnect mid-game** — `OnDisconnectedAsync` finds game by objectId → `MarkPlayerDisconnected` runs under lock →
+`GameStateUpdated` broadcast to remaining players. Reconnect window applies before cleanup evicts the player.
 
-**Reconnect** — `withAutomaticReconnect()` restores transport → client's `Reconnected` handler calls `JoinGame` → hub
-re-adds connection to the group and sends current `GameStateDto` directly to that connection.
+**Reconnect** — `withAutomaticReconnect()` restores transport → client's `Reconnected` handler calls `JoinGame` →
+hub re-adds connection to the group, updates `ConnectionId` on the player record, and broadcasts current `GameStateDto`.
 
 ---
 
@@ -637,7 +729,7 @@ re-adds connection to the group and sends current `GameStateDto` directly to tha
 | Non-host calls `StartGame`      | Error: "Only host can start"                                 |
 | Host leaves lobby               | `player[0]` promoted, `HostChanged` broadcast                |
 | Last player leaves              | Room deleted immediately                                     |
-| Player disconnects mid-turn     | Resigned, bankrupted, state broadcast to room                |
+| Player disconnects mid-turn     | Marked disconnected, state broadcast to room                 |
 | Reconnect to active game        | Full `GameStateDto` sent to reconnecting connection          |
 | Buy already-owned property      | Engine rejects: "Already owned"                              |
 | Insufficient cash               | Engine rejects with reason, no state change                  |
@@ -647,6 +739,9 @@ re-adds connection to the group and sends current `GameStateDto` directly to tha
 | "Go back 3" lands on Chance     | Chain draw: next card executed immediately                   |
 | Player bankrupted mid-trade     | Trade cancelled, properties returned to bank                 |
 | Concurrent buy attempts         | `_lock` ensures first writer wins; second receives rejection |
+| Unauthenticated hub connection  | ASP.NET Core rejects at middleware — hub never invoked       |
+| Non-admin calls admin method    | `[Authorize(Roles="Admin")]` rejects at hub class level      |
+| MutateGame returns false        | Game vanished between pre-check and mutation — logged as warning |
 
 ---
 
@@ -654,27 +749,31 @@ re-adds connection to the group and sends current `GameStateDto` directly to tha
 
 **No auctions by design** — Property stays unowned if declined. Auctions prolong games and were removed after feedback.
 
-**NoSQL database support** — State is persisted to JSON for recovery; a relational store can be added later by implementing
-`IGameStateStore` without touching the engine.
+**No Newtonsoft.Json** — The entire stack uses System.Text.Json including Cosmos DB via `StjCosmosSerializer`.
 
-**Roles or permissions is given via Admin Hub** — everyone can create and host but Admin has its own Panel Client and diagnostics view and is rate-limited
+**No per-game locks** — A single manager-level lock is simpler to reason about and sufficient at the player cap.
 
 ---
 
 ## Architecture Invariants
 
-| Layer            | Responsibility                                        |
-|------------------|-------------------------------------------------------|
-| **Models**       | Data containers — no logic                            |
-| **Engine**       | All game rules — stateless, validated, logged         |
-| **Services**     | Orchestration, locking, cleanup                       |
-| **Hub**          | Transport only — validate · delegate · broadcast      |
-| **DTOs**         | Typed serialisation boundary                          |
-| **Persistence**  | JSON file I/O, isolated from engine and hub           |
-| **React**        | Presentational — server is the single source of truth |
+| Layer           | Responsibility                                                          |
+|-----------------|-------------------------------------------------------------------------|
+| **Models**      | Data containers — no logic                                              |
+| **Engine**      | All game rules — stateless, validated, logged                           |
+| **Services**    | Orchestration, locking, cleanup                                         |
+| **Hub**         | Transport only — validate · delegate · broadcast                        |
+| **DTOs**        | Typed serialisation boundary                                            |
+| **Persistence** | `IGameRepository` / `IUserRepository` — swappable, isolated from engine |
+| **Auth**        | Entra External ID JWT — identity from claims, roles from Cosmos         |
+| **React**       | Presentational — server is the single source of truth                   |
 
-- Hub never calls `GameEngine` directly — always via `MutateGame` or `ExecuteWithEngine` on `GameRoomManager`
+- Hub never calls `GameEngine` directly — always via `MutateGame`, `ExecuteWithEngine`, or `InitializeEngine`
 - State mutations only happen inside `_lock`
-- Broadcasts happen after the lock is released, never inside it
+- Broadcasts and async I/O happen after the lock is released, never inside it
+- `DeleteGame` is never called from inside a `MutateGame` lambda — use a signal flag instead
+- `InitializeAsync` is awaited before `RunAsync` — hosted services never run against an empty game dictionary
 - React components always return their unsubscribe functions from `useEffect`
 - Client never mutates game state locally — waits for `GameStateUpdated`
+- Player identity is always resolved from B2C objectId claims, never from `ConnectionId`
+- Admin access is a Cosmos-persisted role claim, never a shared secret in config or a method parameter
