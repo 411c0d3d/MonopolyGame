@@ -1,5 +1,7 @@
-﻿using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
 using MonopolyServer.Bot;
+using MonopolyServer.Data.Repositories.UserAuth;
 using MonopolyServer.Game.Constants;
 using MonopolyServer.Game.Models;
 using MonopolyServer.Game.Models.Enums;
@@ -10,50 +12,37 @@ namespace MonopolyServer.Hubs;
 
 /// <summary>
 /// Admin hub for server management and game control operations.
+/// Requires the Admin role — enforced at the hub level via [Authorize].
 /// All game state mutations go through GameRoomManager.MutateGame to run under the global lock.
-/// Persistence and broadcasts always happen outside the lock.
 /// </summary>
+[Authorize(Roles = UserClaimsTransformation.AdminRole)]
 public class AdminHub : Hub
 {
     private readonly GameRoomManager _roomManager;
-    private readonly IConfiguration _configuration;
     private readonly BotTurnOrchestrator _botTurnOrchestrator;
     private readonly IHubContext<GameHub> _gameHubContext;
     private readonly ILogger<AdminHub> _logger;
 
     /// <summary>
-    /// Constructor with dependency injection for game room management, logging, and configuration access.
+    /// Constructor with dependency injection for game room management, bot orchestration, hub context, and logging.
     /// </summary>
-    /// <param name="roomManager">Manages game rooms, including retrieval, updates, and persistence of game state.</param>
-    /// <param name="botTurnOrchestrator">Orchestrates and schedules bot turns for automated players in active games.</param>
-    /// <param name="logger">Logger used to record hub operations, warnings, and admin actions.</param>
-    /// <param name="configuration">Provides access to application configuration values (e.g., the admin key).</param>
-    /// <param name="gameHubContext">The Game Hub Context.</param>
     public AdminHub(
         GameRoomManager roomManager,
         BotTurnOrchestrator botTurnOrchestrator,
         IHubContext<GameHub> gameHubContext,
-        ILogger<AdminHub> logger,
-        IConfiguration configuration)
+        ILogger<AdminHub> logger)
     {
         _roomManager = roomManager;
         _botTurnOrchestrator = botTurnOrchestrator;
         _gameHubContext = gameHubContext;
         _logger = logger;
-        _configuration = configuration;
     }
 
     /// <summary>
-    /// Force end a game immediately. Marks game as finished without determining a winner.
+    /// Force ends a game immediately. Marks it as finished without determining a winner.
     /// </summary>
-    public async Task ForceEndGame(string gameId, string adminKey)
+    public async Task ForceEndGame(string gameId)
     {
-        if (!ValidateAdminKey(adminKey))
-        {
-            await SendError(nameof(ForceEndGame), gameId, "Unauthorized");
-            return;
-        }
-
         if (_roomManager.GetGame(gameId) == null)
         {
             await SendError(nameof(ForceEndGame), gameId, "Game not found");
@@ -81,16 +70,10 @@ public class AdminHub : Hub
     }
 
     /// <summary>
-    /// Kick a player from a game. Removes player if waiting, marks bankrupt if in progress.
+    /// Kicks a player from a game. Removes them if waiting, marks bankrupt if in progress.
     /// </summary>
-    public async Task KickPlayer(string gameId, string playerId, string adminKey)
+    public async Task KickPlayer(string gameId, string playerId)
     {
-        if (!ValidateAdminKey(adminKey))
-        {
-            await SendError(nameof(KickPlayer), gameId, "Unauthorized");
-            return;
-        }
-
         if (_roomManager.GetGame(gameId) == null)
         {
             await SendError(nameof(KickPlayer), gameId, "Game not found");
@@ -136,8 +119,8 @@ public class AdminHub : Hub
 
         if (!found || errorMsg != null)
         {
-            var reason = !found ? "Game vanished before kick could complete" : errorMsg!;
-            await SendError(nameof(KickPlayer), gameId, reason);
+            await SendError(nameof(KickPlayer), gameId,
+                !found ? "Game vanished before kick could complete" : errorMsg!);
             return;
         }
 
@@ -158,16 +141,10 @@ public class AdminHub : Hub
     }
 
     /// <summary>
-    /// Pause a game in progress. Prevents all actions until resumed.
+    /// Pauses a game in progress. Prevents all actions until resumed.
     /// </summary>
-    public async Task PauseGame(string gameId, string adminKey)
+    public async Task PauseGame(string gameId)
     {
-        if (!ValidateAdminKey(adminKey))
-        {
-            await SendError(nameof(PauseGame), gameId, "Unauthorized");
-            return;
-        }
-
         if (_roomManager.GetGame(gameId) == null)
         {
             await SendError(nameof(PauseGame), gameId, "Game not found");
@@ -212,16 +189,10 @@ public class AdminHub : Hub
     }
 
     /// <summary>
-    /// Resume a paused game.
+    /// Resumes a paused game.
     /// </summary>
-    public async Task ResumeGame(string gameId, string adminKey)
+    public async Task ResumeGame(string gameId)
     {
-        if (!ValidateAdminKey(adminKey))
-        {
-            await SendError(nameof(ResumeGame), gameId, "Unauthorized");
-            return;
-        }
-
         if (_roomManager.GetGame(gameId) == null)
         {
             await SendError(nameof(ResumeGame), gameId, "Game not found");
@@ -266,16 +237,10 @@ public class AdminHub : Hub
     }
 
     /// <summary>
-    /// Get detailed game state for debugging.
+    /// Returns detailed game state for debugging purposes.
     /// </summary>
-    public async Task GetGameDetails(string gameId, string adminKey)
+    public async Task GetGameDetails(string gameId)
     {
-        if (!ValidateAdminKey(adminKey))
-        {
-            await SendError(nameof(GetGameDetails), gameId, "Unauthorized");
-            return;
-        }
-
         var game = _roomManager.GetGame(gameId);
         if (game == null)
         {
@@ -321,14 +286,8 @@ public class AdminHub : Hub
     /// Adds one or more bot players to a waiting or in-progress game.
     /// Bots are named "Bot N", continuing from the highest existing bot number.
     /// </summary>
-    public async Task AddBotToGame(string gameId, string adminKey, int count = 1)
+    public async Task AddBotToGame(string gameId, int count = 1)
     {
-        if (!ValidateAdminKey(adminKey))
-        {
-            await SendError(nameof(AddBotToGame), gameId, "Unauthorized");
-            return;
-        }
-
         if (count < 1 || count > GameConstants.MaxPlayers)
         {
             await SendError(nameof(AddBotToGame), gameId,
@@ -424,14 +383,5 @@ public class AdminHub : Hub
         _logger.LogWarning("[{Method}] {Message} — gameId={GameId} connectionId={ConnectionId}",
             method, message, gameId, Context.ConnectionId);
         await Clients.Caller.SendAsync("Error", message);
-    }
-
-    /// <summary>
-    /// Validates the admin key against configuration.
-    /// </summary>
-    private bool ValidateAdminKey(string adminKey)
-    {
-        var configuredKey = _configuration["AdminKey"];
-        return !string.IsNullOrEmpty(configuredKey) && configuredKey == adminKey;
     }
 }

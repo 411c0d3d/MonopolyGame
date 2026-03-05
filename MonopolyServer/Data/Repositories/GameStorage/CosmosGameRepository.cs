@@ -5,7 +5,7 @@ using Microsoft.Azure.Cosmos;
 using MonopolyServer.Game.Models;
 using MonopolyServer.Infrastructure;
 
-namespace MonopolyServer.Data.Repositories;
+namespace MonopolyServer.Data.Repositories.GameStorage;
 
 /// <summary>
 /// Cosmos DB implementation of IGameRepository using Microsoft.Azure.Cosmos v3.
@@ -14,7 +14,7 @@ namespace MonopolyServer.Data.Repositories;
 /// Partition key is /id — one logical partition per game.
 /// Call InitializeAsync() at startup before serving requests.
 /// </summary>
-public sealed class CosmosGameRepository : IGameRepository, IDisposable
+public sealed class CosmosGameRepository : IGameRepository
 {
     private readonly CosmosClient _client;
     private readonly string _databaseId;
@@ -22,39 +22,30 @@ public sealed class CosmosGameRepository : IGameRepository, IDisposable
     private readonly ILogger<CosmosGameRepository> _logger;
     private Container _container = null!;
 
-    private static readonly JsonSerializerOptions JsonOptions = BuildJsonOptions();
-
-    /// <summary>Builds the CosmosClient with a custom STJ serializer. Does not open a connection yet.</summary>
-    public CosmosGameRepository(CosmosSettings settings, ILogger<CosmosGameRepository> logger)
+    /// <summary>Accepts the shared CosmosClient registered in DI.</summary>
+    public CosmosGameRepository(CosmosClient client, CosmosSettings settings, ILogger<CosmosGameRepository> logger)
     {
+        _client = client;
         _logger = logger;
         _databaseId = settings.DatabaseId;
         _collectionId = settings.CollectionId;
-
-        var isDevelopment = settings.Endpoint.Contains("localhost");
-
-        _client = new CosmosClient(settings.Endpoint, settings.AuthKey, new CosmosClientOptions
-        {
-            Serializer = new StjCosmosSerializer(JsonOptions),
-            HttpClientFactory = isDevelopment
-                ? () => new HttpClient(new HttpClientHandler
-                {
-                    ServerCertificateCustomValidationCallback =
-                        HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-                })
-                : null,
-            ConnectionMode = isDevelopment ? ConnectionMode.Gateway : ConnectionMode.Direct
-        });
     }
 
-    /// <summary>Ensures the database and partitioned container exist. Call once at startup.</summary>
+    /// <summary>Ensures the database and partitioned games container exist. Call once at startup.</summary>
     public async Task InitializeAsync()
     {
         try
         {
             var dbResponse = await _client.CreateDatabaseIfNotExistsAsync(_databaseId);
+
             _container = await dbResponse.Database.CreateContainerIfNotExistsAsync(
                 id: _collectionId,
+                partitionKeyPath: "/id",
+                throughput: 400);
+
+            // Ensure users container also exists
+            await dbResponse.Database.CreateContainerIfNotExistsAsync(
+                id: _collectionId.Replace("games", "users"),
                 partitionKeyPath: "/id",
                 throughput: 400);
 
@@ -165,19 +156,4 @@ public sealed class CosmosGameRepository : IGameRepository, IDisposable
             _logger.LogError(ex, "Error deleting game {GameId} from Cosmos", gameId);
         }
     }
-
-    private static JsonSerializerOptions BuildJsonOptions()
-    {
-        var options = new JsonSerializerOptions
-        {
-            WriteIndented = false,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        };
-        options.Converters.Add(new JsonStringEnumConverter());
-        return options;
-    }
-
-    /// <inheritdoc/>
-    public void Dispose() => _client.Dispose();
 }

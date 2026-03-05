@@ -1,0 +1,75 @@
+﻿using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Extensions.Options;
+using Microsoft.Identity.Web;
+using MonopolyServer.Infrastructure;
+using MonopolyServer.Infrastructure.Auth;
+
+namespace MonopolyServer.Data.Repositories.UserAuth;
+
+/// <summary>
+/// DI registration for authentication and authorization.
+/// Wires Microsoft Entra External ID JWT validation, SignalR token extraction,
+/// role-based authorization, and claim enrichment from Cosmos.
+/// </summary>
+public static class AuthServiceExtensions
+{
+    /// <summary>
+    /// Registers JWT auth against Entra External ID, authorization policies,
+    /// and the UserClaimsTransformation that enriches principals with roles from Cosmos.
+    /// Must be called after AddGamePersistence so the Cosmos client is available.
+    /// </summary>
+    public static IServiceCollection AddGameAuth(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.Configure<AzureAdSettings>(configuration.GetSection(AzureAdSettings.SectionName));
+
+        services
+            .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddMicrosoftIdentityWebApi(configuration.GetSection(AzureAdSettings.SectionName));
+
+        // SignalR passes the JWT as ?access_token= in the query string since
+        // browsers cannot set Authorization headers on WebSocket connections.
+        services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
+        {
+            options.Events = new JwtBearerEvents
+            {
+                OnMessageReceived = ctx =>
+                {
+                    var token = ctx.Request.Query["access_token"];
+                    var path = ctx.HttpContext.Request.Path;
+
+                    if (!string.IsNullOrEmpty(token) &&
+                        (path.StartsWithSegments("/game-hub") ||
+                         path.StartsWithSegments("/admin-hub")))
+                    {
+                        ctx.Token = token;
+                    }
+
+                    return Task.CompletedTask;
+                }
+            };
+        });
+
+        services.AddAuthorization(options =>
+        {
+            options.AddPolicy("AdminOnly", policy => policy.RequireRole(UserClaimsTransformation.AdminRole));
+        });
+
+        // Enriches every authenticated principal with roles from Cosmos
+        services.AddScoped<IClaimsTransformation, UserClaimsTransformation>();
+
+        // Register IUserRepository — reuses the CosmosClient already registered by AddGamePersistence
+        services.AddSingleton<IUserRepository>(sp =>
+        {
+            var cosmosSettings = sp.GetRequiredService<IOptions<CosmosSettings>>().Value;
+            var client = sp.GetRequiredService<Microsoft.Azure.Cosmos.CosmosClient>();
+            var container = client.GetContainer(cosmosSettings.DatabaseId, cosmosSettings.UsersCollectionId);
+            var logger = sp.GetRequiredService<ILogger<CosmosUserRepository>>();
+            return new CosmosUserRepository(container, logger);
+        });
+
+        return services;
+    }
+}

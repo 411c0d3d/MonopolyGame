@@ -1,5 +1,6 @@
 using MonopolyServer.Bot;
-using MonopolyServer.Data.Repositories;
+using MonopolyServer.Data.Repositories.GameStorage;
+using MonopolyServer.Data.Repositories.UserAuth;
 using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Game.Services;
 using MonopolyServer.Hubs;
@@ -32,6 +33,9 @@ public class Program
         // Persistence — registers IGameRepository (file or Cosmos based on appsettings)
         builder.Services.AddGamePersistence(builder.Configuration);
 
+        // Auth — Entra External ID JWT validation, role-based authorization, claims enrichment
+        builder.Services.AddGameAuth(builder.Configuration);
+
         // Game services — registers GameRoomManager and GameCleanupService
         builder.Services.AddGameServices();
 
@@ -56,7 +60,10 @@ public class Program
         app.UseRouting();
         app.UseCors("AllowAll");
 
-        // Hub Endpoints
+        // Auth middleware must be between routing and endpoints
+        app.UseAuthentication();
+        app.UseAuthorization();
+
         app.MapHub<GameHub>("/game-hub");
         app.MapHub<AdminHub>("/admin-hub");
 

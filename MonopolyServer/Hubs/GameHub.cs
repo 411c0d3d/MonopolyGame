@@ -1,5 +1,7 @@
-﻿using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
 using MonopolyServer.Bot;
+using MonopolyServer.Data.Repositories.UserAuth;
 using MonopolyServer.DTOs;
 using MonopolyServer.Game.Constants;
 using MonopolyServer.Game.Models;
@@ -11,9 +13,10 @@ namespace MonopolyServer.Hubs;
 
 /// <summary>
 /// SignalR Hub for real-time Monopoly game communication.
-/// All game state mutations go through GameRoomManager.MutateGame / InitializeEngine / ExecuteWithEngine
-/// to ensure they run under the global lock. Persistence and broadcasts always happen outside the lock.
+/// Requires authentication — player identity is derived from the B2C objectId claim.
+/// All game state mutations go through GameRoomManager.MutateGame / InitializeEngine / ExecuteWithEngine.
 /// </summary>
+[Authorize]
 public class GameHub : Hub
 {
     private readonly GameRoomManager _roomManager;
@@ -22,7 +25,9 @@ public class GameHub : Hub
     private readonly InputValidator _validator;
     private readonly ILogger<GameHub> _logger;
 
-    /// <summary>Constructor with dependency injection for game room management, trade services, input validation, and logging.</summary>
+    /// <summary>
+    /// Constructor with dependency injection for game room management, trade services, input validation, and logging.
+    /// </summary>
     public GameHub(
         GameRoomManager roomManager,
         TradeService tradeService,
@@ -37,8 +42,12 @@ public class GameHub : Hub
         _logger = logger;
     }
 
-    /// <summary>Authenticates and adds a player to a game session. Supports rejoining via name matching.</summary>
-    public async Task JoinGame(string gameId, string playerName)
+    /// <summary>
+    /// Adds the authenticated user to a game session.
+    /// Player ID is the B2C objectId. Display name comes from the identity claims.
+    /// Supports transparent reconnection if the player was already in the game.
+    /// </summary>
+    public async Task JoinGame(string gameId)
     {
         try
         {
@@ -49,11 +58,12 @@ public class GameHub : Hub
                 return;
             }
 
-            playerName = _validator.SanitizePlayerName(playerName);
-            var (isNameValid, nameError) = _validator.ValidatePlayerName(playerName);
-            if (!isNameValid)
+            var objectId = GetCallerObjectId();
+            var displayName = GetCallerDisplayName();
+
+            if (objectId == null)
             {
-                await SendError(nameof(JoinGame), gameId, nameError!);
+                await SendError(nameof(JoinGame), gameId, "Identity claims missing");
                 return;
             }
 
@@ -67,7 +77,7 @@ public class GameHub : Hub
 
             var found = _roomManager.MutateGame(gameId, (g, _) =>
             {
-                var existing = g.Players.FirstOrDefault(p => p.Name == playerName);
+                var existing = g.Players.FirstOrDefault(p => p.Id == objectId);
                 if (existing != null)
                 {
                     existing.ConnectionId = Context.ConnectionId;
@@ -92,7 +102,7 @@ public class GameHub : Hub
                     return;
                 }
 
-                var player = new Player(Guid.NewGuid().ToString(), playerName)
+                var player = new Player(objectId, displayName)
                     { ConnectionId = Context.ConnectionId, IsConnected = true };
                 g.Players.Add(player);
                 if (string.IsNullOrEmpty(g.HostId))
@@ -122,7 +132,9 @@ public class GameHub : Hub
         }
     }
 
-    /// <summary>Transitions the game from the lobby to an active state.</summary>
+    /// <summary>
+    /// Transitions the game from the lobby to an active state.
+    /// </summary>
     public async Task StartGame(string gameId)
     {
         if (_roomManager.GetGame(gameId) == null)
@@ -172,14 +184,12 @@ public class GameHub : Hub
     public async Task RollDice(string gameId)
     {
         string? errorMsg = null;
-        int d1 = 0, d2 = 0;
-        bool sentToJail = false;
-        int total = 0;
+        int d1 = 0, d2 = 0, total = 0;
         Card? drawnCard = null;
 
         var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
         {
-            var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+            var (valid, caller, err) = VerifyCurrentPlayer(g, GetCallerObjectId());
             if (!valid)
             {
                 errorMsg = err;
@@ -198,6 +208,7 @@ public class GameHub : Hub
                 return;
             }
 
+            bool sentToJail;
             (d1, d2, total, _, sentToJail) = engine.RollDice();
 
             if (sentToJail)
@@ -238,7 +249,9 @@ public class GameHub : Hub
         await PersistAndBroadcast(gameId);
     }
 
-    /// <summary>Executes a property purchase for the current player on their current tile.</summary>
+    /// <summary>
+    /// Executes a property purchase for the current player on their current tile.
+    /// </summary>
     public async Task BuyProperty(string gameId)
     {
         try
@@ -247,7 +260,7 @@ public class GameHub : Hub
 
             var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                var (valid, caller, err) = VerifyCurrentPlayer(g, GetCallerObjectId());
                 if (!valid)
                 {
                     errorMsg = err;
@@ -287,7 +300,9 @@ public class GameHub : Hub
         }
     }
 
-    /// <summary>Builds a house on the specified property. Requires a monopoly and sufficient cash.</summary>
+    /// <summary>
+    /// Builds a house on the specified property. Requires a monopoly and sufficient cash.
+    /// </summary>
     public async Task BuildHouse(string gameId, int propertyId)
     {
         try
@@ -303,7 +318,7 @@ public class GameHub : Hub
 
             var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                var (valid, caller, err) = VerifyCurrentPlayer(g, GetCallerObjectId());
                 if (!valid)
                 {
                     errorMsg = err;
@@ -344,7 +359,9 @@ public class GameHub : Hub
         }
     }
 
-    /// <summary>Builds a hotel on the specified property. Requires four houses and sufficient cash.</summary>
+    /// <summary>
+    /// Builds a hotel on the specified property. Requires four houses and sufficient cash.
+    /// </summary>
     public async Task BuildHotel(string gameId, int propertyId)
     {
         try
@@ -360,7 +377,7 @@ public class GameHub : Hub
 
             var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                var (valid, caller, err) = VerifyCurrentPlayer(g, GetCallerObjectId());
                 if (!valid)
                 {
                     errorMsg = err;
@@ -401,7 +418,9 @@ public class GameHub : Hub
         }
     }
 
-    /// <summary>Sells the hotel on the specified property, returning 50% of hotel cost to the player.</summary>
+    /// <summary>
+    /// Sells the hotel on the specified property, returning 50% of hotel cost to the player.
+    /// </summary>
     public async Task SellHotel(string gameId, int propertyId)
     {
         try
@@ -417,7 +436,7 @@ public class GameHub : Hub
 
             var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                var (valid, caller, err) = VerifyCurrentPlayer(g, GetCallerObjectId());
                 if (!valid)
                 {
                     errorMsg = err;
@@ -464,7 +483,9 @@ public class GameHub : Hub
         }
     }
 
-    /// <summary>Sells one house from the specified property, returning 50% of house cost to the player.</summary>
+    /// <summary>
+    /// Sells one house from the specified property, returning 50% of house cost to the player.
+    /// </summary>
     public async Task SellHouse(string gameId, int propertyId)
     {
         try
@@ -480,7 +501,7 @@ public class GameHub : Hub
 
             var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                var (valid, caller, err) = VerifyCurrentPlayer(g, GetCallerObjectId());
                 if (!valid)
                 {
                     errorMsg = err;
@@ -544,7 +565,7 @@ public class GameHub : Hub
 
         var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
         {
-            var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+            var (valid, caller, err) = VerifyCurrentPlayer(g, GetCallerObjectId());
             if (!valid)
             {
                 errorMsg = err;
@@ -567,15 +588,15 @@ public class GameHub : Hub
             }
             else if (payFine)
             {
-                
                 engine.ReleaseFromJail(caller, payToBail: true);
                 // Player is now free — they must still call RollDice to move this turn
             }
             else
             {
                 // Roll attempt — engine.RollDice sets DoubleRolled before ReleaseFromJail reads it
-                var (dice1, dice2, total, isDouble, sentToJail) = engine.RollDice();
+                var (_, _, total, isDouble, _) = engine.RollDice();
                 bool escaped = engine.ReleaseFromJail(caller, payToBail: false);
+
                 if (escaped)
                 {
                     engine.MovePlayer(total);
@@ -619,7 +640,7 @@ public class GameHub : Hub
 
         var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
         {
-            var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+            var (valid, caller, err) = VerifyCurrentPlayer(g, GetCallerObjectId());
             if (!valid)
             {
                 errorMsg = err;
@@ -763,7 +784,7 @@ public class GameHub : Hub
 
         var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
         {
-            var (valid, player, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+            var (valid, player, err) = VerifyCurrentPlayer(g, GetCallerObjectId());
             if (!valid)
             {
                 errorMsg = err;
@@ -805,14 +826,15 @@ public class GameHub : Hub
     /// </summary>
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        var game = _roomManager.GetAllGames()
-            .FirstOrDefault(g => g.Players.Any(p => p.ConnectionId == Context.ConnectionId));
-
-        if (game != null)
+        var objectId = GetCallerObjectId();
+        if (objectId != null)
         {
-            var playerId = game.Players.First(p => p.ConnectionId == Context.ConnectionId).Id;
-            _roomManager.MarkPlayerDisconnected(playerId);
-            await PersistAndBroadcast(game.GameId);
+            var game = _roomManager.GetGameByPlayerId(objectId);
+            if (game != null)
+            {
+                _roomManager.MarkPlayerDisconnected(objectId);
+                await PersistAndBroadcast(game.GameId);
+            }
         }
 
         if (exception != null)
@@ -1048,9 +1070,7 @@ public class GameHub : Hub
         await Clients.Caller.SendAsync("Error", message);
     }
 
-    /// <summary>
-    /// Persists game state, broadcasts to all players in the group, then schedules a bot turn if applicable.
-    /// </summary>
+    /// <summary>Persists game state, broadcasts to all players in the group, then schedules a bot turn if applicable.</summary>
     private async Task PersistAndBroadcast(string gameId)
     {
         await _roomManager.SaveGameAsync(gameId);
@@ -1065,13 +1085,16 @@ public class GameHub : Hub
         _botOrchestrator.TryScheduleIfBotTurn(gameId, game);
     }
 
-    /// <summary>
-    /// Validates that the SignalR caller is the authorized player for the current turn.
-    /// </summary>
+    /// <summary>Validates that the caller is the current turn's player.</summary>
     private static (bool isValid, Player? player, string? error) VerifyCurrentPlayer(
-        GameState game, string connectionId)
+        GameState game, string? objectId)
     {
-        var caller = game.Players.FirstOrDefault(p => p.ConnectionId == connectionId);
+        if (objectId == null)
+        {
+            return (false, null, "Unauthorized");
+        }
+
+        var caller = game.Players.FirstOrDefault(p => p.Id == objectId);
         if (caller == null)
         {
             return (false, null, "Unauthorized");
@@ -1108,8 +1131,23 @@ public class GameHub : Hub
     };
 
     /// <summary>
-    /// Resolves the calling player by their SignalR connection ID.
+    /// Resolves the calling player by their B2C objectId.
     /// </summary>
     private Player? GetCallingPlayer(GameState? game) =>
-        game?.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+        game?.Players.FirstOrDefault(p => p.Id == GetCallerObjectId());
+
+    /// <summary>
+    /// Extracts the B2C objectId from the authenticated user's claims.
+    /// </summary>
+    private string? GetCallerObjectId() =>
+        Context.User?.FindFirst(UserClaimsTransformation.ObjectIdClaimType)?.Value
+        ?? Context.User?.FindFirst("oid")?.Value;
+
+    /// <summary>
+    /// Extracts the display name from the authenticated user's claims.
+    /// </summary>
+    private string GetCallerDisplayName() =>
+        Context.User?.FindFirst("name")?.Value
+        ?? Context.User?.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
+        ?? "Player";
 }

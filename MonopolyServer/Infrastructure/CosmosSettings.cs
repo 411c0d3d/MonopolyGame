@@ -27,4 +27,9 @@ public sealed class CosmosSettings
     /// The name of the Cosmos DB container (collection) to use for storing game data.
     /// </summary>
     public string CollectionId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The name of the Cosmos DB container (collection) to use for storing user data.
+    /// </summary>
+    public string UsersCollectionId { get; init; } = string.Empty;
 }
