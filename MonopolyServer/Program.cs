@@ -1,14 +1,18 @@
 using MonopolyServer.Bot;
+using MonopolyServer.Data.Repositories;
 using MonopolyServer.Game.Models.Enums;
-using MonopolyServer.Hubs;
 using MonopolyServer.Game.Services;
+using MonopolyServer.Hubs;
 using MonopolyServer.Infrastructure;
 
 namespace MonopolyServer;
 
+/// <summary>
+/// Main entry point for the Monopoly Server application. Configures services, middleware, and endpoints.
+/// </summary>
 public class Program
 {
-    public static void Main(string[] args)
+    public static async Task Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
 
@@ -18,23 +22,26 @@ public class Program
         {
             options.AddPolicy("AllowAll", policy =>
             {
-                policy.WithOrigins("http://localhost:5299") // Ensure this matches your Client's URL
+                policy.WithOrigins("http://localhost:5299")
                     .AllowAnyMethod()
                     .AllowAnyHeader()
                     .AllowCredentials();
             });
         });
 
-        // Register Game Services
+        // Persistence — registers IGameRepository (file or Cosmos based on appsettings)
+        builder.Services.AddGamePersistence(builder.Configuration);
+
+        // Game services — registers GameRoomManager and GameCleanupService
+        builder.Services.AddGameServices();
+
         builder.Services.AddSingleton<InputValidator>();
-        builder.Services.AddSingleton<GameRoomManager>();
         builder.Services.AddSingleton<TradeService>();
         builder.Services.AddSingleton<LobbyService>();
         builder.Services.AddSingleton<BotDecisionEngine>();
         builder.Services.AddSingleton<BotTurnOrchestrator>();
 
         // Register Background Workers
-        builder.Services.AddHostedService<GameCleanupService>();
         builder.Services.AddHostedService<TurnTimerService>();
 
         builder.Services.AddLogging(config =>
@@ -56,11 +63,10 @@ public class Program
         // API Endpoints
         app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
-        app.MapGet("/api/games",
-            (GameRoomManager rm) =>
-            {
-                return Results.Ok(rm.GetAllGames().Where(g => g.Status != GameStatus.Finished));
-            });
+        app.MapGet("/api/games", (GameRoomManager rm) =>
+        {
+            return Results.Ok(rm.GetAllGames().Where(g => g.Status != GameStatus.Finished));
+        });
 
         // Added POST endpoint to solve your 405 error
         app.MapPost("/api/games", (GameRoomManager rm) =>
@@ -69,6 +75,10 @@ public class Program
             return Results.Ok(new { gameId });
         });
 
-        app.Run();
+        // Must complete before RunAsync — guarantees GameRoomManager is fully loaded
+        // before GameCleanupService.ExecuteAsync fires on startup.
+        await app.InitializeGameManagerAsync();
+
+        await app.RunAsync();
     }
 }

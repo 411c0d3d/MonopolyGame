@@ -2,7 +2,6 @@
 using MonopolyServer.Bot;
 using MonopolyServer.DTOs;
 using MonopolyServer.Game.Constants;
-using MonopolyServer.Game.Engine;
 using MonopolyServer.Game.Models;
 using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Game.Services;
@@ -12,7 +11,8 @@ namespace MonopolyServer.Hubs;
 
 /// <summary>
 /// SignalR Hub for real-time Monopoly game communication.
-/// Handles persistent player sessions, game state orchestration, and validated input processing.
+/// All game state mutations go through GameRoomManager.MutateGame / InitializeEngine / ExecuteWithEngine
+/// to ensure they run under the global lock. Persistence and broadcasts always happen outside the lock.
 /// </summary>
 public class GameHub : Hub
 {
@@ -22,9 +22,7 @@ public class GameHub : Hub
     private readonly InputValidator _validator;
     private readonly ILogger<GameHub> _logger;
 
-    /// <summary>
-    /// Constructor with dependency injection for game room management, trade services, input validation, and logging.
-    /// </summary>
+    /// <summary>Constructor with dependency injection for game room management, trade services, input validation, and logging.</summary>
     public GameHub(
         GameRoomManager roomManager,
         TradeService tradeService,
@@ -39,9 +37,7 @@ public class GameHub : Hub
         _logger = logger;
     }
 
-    /// <summary>
-    /// Authenticates and adds a player to a game session. Supports rejoining via name matching for persistent sessions.
-    /// </summary>
+    /// <summary>Authenticates and adds a player to a game session. Supports rejoining via name matching.</summary>
     public async Task JoinGame(string gameId, string playerName)
     {
         try
@@ -49,7 +45,7 @@ public class GameHub : Hub
             var (isGameIdValid, gameIdError) = _validator.ValidateGameId(gameId);
             if (!isGameIdValid)
             {
-                await Clients.Caller.SendAsync("Error", gameIdError);
+                await SendError(nameof(JoinGame), gameId, gameIdError!);
                 return;
             }
 
@@ -57,201 +53,241 @@ public class GameHub : Hub
             var (isNameValid, nameError) = _validator.ValidatePlayerName(playerName);
             if (!isNameValid)
             {
-                await Clients.Caller.SendAsync("Error", nameError);
+                await SendError(nameof(JoinGame), gameId, nameError!);
                 return;
             }
 
-            var game = _roomManager.GetGame(gameId);
-            if (game == null)
+            if (_roomManager.GetGame(gameId) == null)
             {
-                await Clients.Caller.SendAsync("Error", "Game not found");
+                await SendError(nameof(JoinGame), gameId, "Game not found");
                 return;
             }
 
-            var player = game.Players.FirstOrDefault(p => p.Name == playerName);
-            if (player != null)
-            {
-                player.ConnectionId = Context.ConnectionId;
-                player.IsConnected = true;
+            string? errorMsg = null;
 
-                if (string.IsNullOrEmpty(game.HostId) || game.Players.Count == 1)
-                {
-                    game.HostId = player.Id;
-                }
-            }
-            else if (game.Status == GameStatus.Waiting)
+            var found = _roomManager.MutateGame(gameId, (g, _) =>
             {
-                if (game.Players.Count >= GameConstants.MaxPlayers)
+                var existing = g.Players.FirstOrDefault(p => p.Name == playerName);
+                if (existing != null)
                 {
-                    await Clients.Caller.SendAsync("Error", "Game is full");
+                    existing.ConnectionId = Context.ConnectionId;
+                    existing.IsConnected = true;
+                    if (string.IsNullOrEmpty(g.HostId))
+                    {
+                        g.HostId = existing.Id;
+                    }
+
                     return;
                 }
 
-                player = new Player(Guid.NewGuid().ToString(), playerName)
-                    { ConnectionId = Context.ConnectionId, IsConnected = true };
-                game.Players.Add(player);
-
-                if (string.IsNullOrEmpty(game.HostId) || game.Players.Count == 1)
+                if (g.Status != GameStatus.Waiting)
                 {
-                    game.HostId = player.Id;
+                    errorMsg = "You are not a participant in this game";
+                    return;
                 }
-            }
-            else
+
+                if (g.Players.Count >= GameConstants.MaxPlayers)
+                {
+                    errorMsg = "Game is full";
+                    return;
+                }
+
+                var player = new Player(Guid.NewGuid().ToString(), playerName)
+                    { ConnectionId = Context.ConnectionId, IsConnected = true };
+                g.Players.Add(player);
+                if (string.IsNullOrEmpty(g.HostId))
+                {
+                    g.HostId = player.Id;
+                }
+            });
+
+            if (!found)
             {
-                await Clients.Caller.SendAsync("Error", "You are not a participant in this game");
+                await SendError(nameof(JoinGame), gameId, "Game vanished before join could complete");
+                return;
+            }
+
+            if (errorMsg != null)
+            {
+                await SendError(nameof(JoinGame), gameId, errorMsg);
                 return;
             }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, gameId);
-            await PersistAndBroadcast(gameId, game);
+            await PersistAndBroadcast(gameId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error in JoinGame for {GameId}", gameId);
+            _logger.LogError(ex, "[{Method}] Unhandled exception — gameId={GameId}", nameof(JoinGame), gameId);
         }
     }
 
-    /// <summary>
-    /// Transitions the game from the lobby to an active state.
-    /// </summary>
+    /// <summary>Transitions the game from the lobby to an active state.</summary>
     public async Task StartGame(string gameId)
     {
-        var game = _roomManager.GetGame(gameId);
-        if (game == null)
+        if (_roomManager.GetGame(gameId) == null)
         {
-            await Clients.Caller.SendAsync("Error", "Game not found");
+            await SendError(nameof(StartGame), gameId, "Game not found");
             return;
         }
 
-        if (game.Status != GameStatus.Waiting)
+        string? errorMsg = null;
+
+        var found = _roomManager.InitializeEngine(gameId, (g, engine) =>
         {
-            await Clients.Caller.SendAsync("Error", "Game already started");
+            if (g.Status != GameStatus.Waiting)
+            {
+                errorMsg = "Game already started";
+                return;
+            }
+
+            if (g.Players.Count < 2)
+            {
+                errorMsg = "Need at least 2 players to start";
+                return;
+            }
+
+            engine.StartGame();
+        });
+
+        if (!found)
+        {
+            await SendError(nameof(StartGame), gameId, "Game vanished before start could complete");
             return;
         }
 
-        if (game.Players.Count < 2)
+        if (errorMsg != null)
         {
-            await Clients.Caller.SendAsync("Error", "Need at least 2 players to start");
+            await SendError(nameof(StartGame), gameId, errorMsg);
             return;
         }
 
-        var engine = _roomManager.GetGameEngine(gameId);
-        if (engine == null)
-        {
-            engine = new GameEngine(game);
-            _roomManager.SetGameEngine(gameId, engine);
-        }
-
-        engine.StartGame();
-        await PersistAndBroadcast(gameId, game);
+        await PersistAndBroadcast(gameId);
     }
 
     /// <summary>
     /// Triggers dice roll for the current player, moves them, and processes board landing logic.
-    /// Jailed players must use HandleJail instead. On three consecutive doubles the turn auto-advances.
+    /// Jailed players must use HandleJail instead.
     /// </summary>
     public async Task RollDice(string gameId)
     {
-        var game = _roomManager.GetGame(gameId);
-        var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-        if (!isValid || currentPlayer == null || game == null)
+        string? errorMsg = null;
+        int d1 = 0, d2 = 0;
+        bool sentToJail = false;
+        int total = 0;
+        Card? drawnCard = null;
+
+        var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
         {
-            await Clients.Caller.SendAsync("Error", error);
+            var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+            if (!valid)
+            {
+                errorMsg = err;
+                return;
+            }
+
+            if (caller!.IsInJail)
+            {
+                errorMsg = "You are in jail — use HandleJail to roll for escape.";
+                return;
+            }
+
+            if (caller.HasRolledDice && !g.DoubleRolled)
+            {
+                errorMsg = "You have already rolled this turn.";
+                return;
+            }
+
+            (d1, d2, total, _, sentToJail) = engine.RollDice();
+
+            if (sentToJail)
+            {
+                // Three consecutive doubles — player goes to jail and their turn ends immediately
+                engine.NextTurn();
+            }
+            else
+            {
+                drawnCard = engine.MovePlayer(total);
+            }
+        });
+
+        if (!found)
+        {
+            await SendError(nameof(RollDice), gameId, "Game or engine not available");
             return;
         }
 
-        if (currentPlayer.IsInJail)
+        if (errorMsg != null)
         {
-            await Clients.Caller.SendAsync("Error", "You are in jail — use HandleJail to roll for escape.");
+            await SendError(nameof(RollDice), gameId, errorMsg);
             return;
         }
 
-        // Block re-roll unless the previous roll was a double this turn
-        if (currentPlayer.HasRolledDice && !game.DoubleRolled)
-        {
-            await Clients.Caller.SendAsync("Error", "You have already rolled this turn.");
-            return;
-        }
-
-        var engine = _roomManager.GetGameEngine(gameId);
-        if (engine == null)
-        {
-            await Clients.Caller.SendAsync("Error", "Game engine not available");
-            return;
-        }
-
-        var (d1, d2, total, _, sentToJail) = engine.RollDice();
-
-        // Broadcast actual dice values so clients can sync their visual display
         await Clients.Group(gameId).SendAsync("DiceRolled", d1, d2);
 
-        if (sentToJail)
+        if (drawnCard != null)
         {
-            // Three consecutive doubles — player goes to jail and their turn ends immediately
-            engine.NextTurn();
-        }
-        else
-        {
-            var drawnCard = engine.MovePlayer(total);
-            if (drawnCard != null)
+            await Clients.Group(gameId).SendAsync("CardDrawn", new
             {
-                await Clients.Group(gameId).SendAsync("CardDrawn", new
-                {
-                    type = drawnCard.DeckType.ToString(),
-                    text = drawnCard.Title,
-                    amount = drawnCard.Amount
-                });
-            }
+                type = drawnCard.DeckType.ToString(),
+                text = drawnCard.Title,
+                amount = drawnCard.Amount
+            });
         }
 
-        await PersistAndBroadcast(gameId, game);
+        await PersistAndBroadcast(gameId);
     }
 
-    /// <summary>
-    /// Executes a property purchase for the current player on their current tile.
-    /// </summary>
+    /// <summary>Executes a property purchase for the current player on their current tile.</summary>
     public async Task BuyProperty(string gameId)
     {
         try
         {
-            var game = _roomManager.GetGame(gameId);
-            var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-            if (!isValid || currentPlayer == null || game == null)
+            string? errorMsg = null;
+
+            var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                await Clients.Caller.SendAsync("Error", error);
+                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                if (!valid)
+                {
+                    errorMsg = err;
+                    return;
+                }
+
+                var property = g.Board.GetProperty(caller!.Position);
+                if (property.Type != PropertyType.Street &&
+                    property.Type != PropertyType.Railroad &&
+                    property.Type != PropertyType.Utility)
+                {
+                    errorMsg = "This space is not purchasable";
+                    return;
+                }
+
+                engine.BuyProperty(property);
+            });
+
+            if (!found)
+            {
+                await SendError(nameof(BuyProperty), gameId, "Game or engine not available");
                 return;
             }
 
-            var property = game.Board.GetProperty(currentPlayer.Position);
-
-            if (property.Type != PropertyType.Street &&
-                property.Type != PropertyType.Railroad &&
-                property.Type != PropertyType.Utility)
+            if (errorMsg != null)
             {
-                await Clients.Caller.SendAsync("Error", "This space is not purchasable");
+                await SendError(nameof(BuyProperty), gameId, errorMsg);
                 return;
             }
 
-            var engine = _roomManager.GetGameEngine(gameId);
-            if (engine == null)
-            {
-                await Clients.Caller.SendAsync("Error", "Game engine not available");
-                return;
-            }
-
-            engine.BuyProperty(property);
-            await PersistAndBroadcast(gameId, game);
+            await PersistAndBroadcast(gameId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error buying property in game {GameId}", gameId);
+            _logger.LogError(ex, "[{Method}] Unhandled exception — gameId={GameId}", nameof(BuyProperty), gameId);
             await Clients.Caller.SendAsync("Error", "Failed to buy property");
         }
     }
 
-    /// <summary>
-    /// Builds a house on the specified property. Requires a monopoly and sufficient cash.
-    /// </summary>
+    /// <summary>Builds a house on the specified property. Requires a monopoly and sufficient cash.</summary>
     public async Task BuildHouse(string gameId, int propertyId)
     {
         try
@@ -259,51 +295,56 @@ public class GameHub : Hub
             var (isPropValid, propErr) = _validator.ValidatePropertyId(propertyId);
             if (!isPropValid)
             {
-                await Clients.Caller.SendAsync("Error", propErr);
+                await SendError(nameof(BuildHouse), gameId, propErr!);
                 return;
             }
 
-            var game = _roomManager.GetGame(gameId);
-            var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-            if (!isValid || currentPlayer == null || game == null)
+            string? errorMsg = null;
+
+            var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                await Clients.Caller.SendAsync("Error", error);
-                return;
-            }
+                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                if (!valid)
+                {
+                    errorMsg = err;
+                    return;
+                }
 
-            var property = game.Board.GetProperty(propertyId);
-            if (property.OwnerId != currentPlayer.Id)
+                var property = g.Board.GetProperty(propertyId);
+                if (property.OwnerId != caller!.Id)
+                {
+                    errorMsg = "You do not own this property";
+                    return;
+                }
+
+                if (!engine.BuildHouse(property))
+                {
+                    errorMsg = "Cannot build a house here — check monopoly ownership, house limit, or cash";
+                }
+            });
+
+            if (!found)
             {
-                await Clients.Caller.SendAsync("Error", "You do not own this property");
+                await SendError(nameof(BuildHouse), gameId, "Game or engine not available");
                 return;
             }
 
-            var engine = _roomManager.GetGameEngine(gameId);
-            if (engine == null)
+            if (errorMsg != null)
             {
-                await Clients.Caller.SendAsync("Error", "Game engine not available");
+                await SendError(nameof(BuildHouse), gameId, errorMsg);
                 return;
             }
 
-            if (!engine.BuildHouse(property))
-            {
-                await Clients.Caller.SendAsync("Error",
-                    "Cannot build a house here — check monopoly ownership, house limit, or cash");
-                return;
-            }
-
-            await PersistAndBroadcast(gameId, game);
+            await PersistAndBroadcast(gameId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error building house in game {GameId}", gameId);
+            _logger.LogError(ex, "[{Method}] Unhandled exception — gameId={GameId}", nameof(BuildHouse), gameId);
             await Clients.Caller.SendAsync("Error", "Failed to build house");
         }
     }
 
-    /// <summary>
-    /// Builds a hotel on the specified property. Requires four houses and sufficient cash.
-    /// </summary>
+    /// <summary>Builds a hotel on the specified property. Requires four houses and sufficient cash.</summary>
     public async Task BuildHotel(string gameId, int propertyId)
     {
         try
@@ -311,51 +352,56 @@ public class GameHub : Hub
             var (isPropValid, propErr) = _validator.ValidatePropertyId(propertyId);
             if (!isPropValid)
             {
-                await Clients.Caller.SendAsync("Error", propErr);
+                await SendError(nameof(BuildHotel), gameId, propErr!);
                 return;
             }
 
-            var game = _roomManager.GetGame(gameId);
-            var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-            if (!isValid || currentPlayer == null || game == null)
+            string? errorMsg = null;
+
+            var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                await Clients.Caller.SendAsync("Error", error);
-                return;
-            }
+                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                if (!valid)
+                {
+                    errorMsg = err;
+                    return;
+                }
 
-            var property = game.Board.GetProperty(propertyId);
-            if (property.OwnerId != currentPlayer.Id)
+                var property = g.Board.GetProperty(propertyId);
+                if (property.OwnerId != caller!.Id)
+                {
+                    errorMsg = "You do not own this property";
+                    return;
+                }
+
+                if (!engine.BuildHotel(property))
+                {
+                    errorMsg = "Cannot build a hotel here — requires 4 houses or check cash";
+                }
+            });
+
+            if (!found)
             {
-                await Clients.Caller.SendAsync("Error", "You do not own this property");
+                await SendError(nameof(BuildHotel), gameId, "Game or engine not available");
                 return;
             }
 
-            var engine = _roomManager.GetGameEngine(gameId);
-            if (engine == null)
+            if (errorMsg != null)
             {
-                await Clients.Caller.SendAsync("Error", "Game engine not available");
+                await SendError(nameof(BuildHotel), gameId, errorMsg);
                 return;
             }
 
-            if (!engine.BuildHotel(property))
-            {
-                await Clients.Caller.SendAsync("Error", "Cannot build a hotel here — requires 4 houses or check cash");
-                return;
-            }
-
-            await PersistAndBroadcast(gameId, game);
+            await PersistAndBroadcast(gameId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error building hotel in game {GameId}", gameId);
+            _logger.LogError(ex, "[{Method}] Unhandled exception — gameId={GameId}", nameof(BuildHotel), gameId);
             await Clients.Caller.SendAsync("Error", "Failed to build hotel");
         }
     }
 
-    /// <summary>
-    /// Sells the hotel on the specified property, returning 50% of hotel cost to the player.
-    /// The hotel is replaced with 4 houses per standard Monopoly rules.
-    /// </summary>
+    /// <summary>Sells the hotel on the specified property, returning 50% of hotel cost to the player.</summary>
     public async Task SellHotel(string gameId, int propertyId)
     {
         try
@@ -363,57 +409,62 @@ public class GameHub : Hub
             var (isPropValid, propErr) = _validator.ValidatePropertyId(propertyId);
             if (!isPropValid)
             {
-                await Clients.Caller.SendAsync("Error", propErr);
+                await SendError(nameof(SellHotel), gameId, propErr!);
                 return;
             }
 
-            var game = _roomManager.GetGame(gameId);
-            var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-            if (!isValid || currentPlayer == null || game == null)
+            string? errorMsg = null;
+
+            var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                await Clients.Caller.SendAsync("Error", error);
-                return;
-            }
+                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                if (!valid)
+                {
+                    errorMsg = err;
+                    return;
+                }
 
-            var property = game.Board.GetProperty(propertyId);
-            if (property.OwnerId != currentPlayer.Id)
+                var property = g.Board.GetProperty(propertyId);
+                if (property.OwnerId != caller!.Id)
+                {
+                    errorMsg = "You do not own this property";
+                    return;
+                }
+
+                if (!property.HasHotel)
+                {
+                    errorMsg = "This property does not have a hotel";
+                    return;
+                }
+
+                if (!engine.SellHotel(property))
+                {
+                    errorMsg = "Cannot sell hotel on this property";
+                }
+            });
+
+            if (!found)
             {
-                await Clients.Caller.SendAsync("Error", "You do not own this property");
+                await SendError(nameof(SellHotel), gameId, "Game or engine not available");
                 return;
             }
 
-            if (!property.HasHotel)
+            if (errorMsg != null)
             {
-                await Clients.Caller.SendAsync("Error", "This property does not have a hotel");
+                await SendError(nameof(SellHotel), gameId, errorMsg);
                 return;
             }
 
-            var engine = _roomManager.GetGameEngine(gameId);
-            if (engine == null)
-            {
-                await Clients.Caller.SendAsync("Error", "Game engine not available");
-                return;
-            }
-
-            if (!engine.SellHotel(property))
-            {
-                await Clients.Caller.SendAsync("Error", "Cannot sell hotel on this property");
-                return;
-            }
-
-            await PersistAndBroadcast(gameId, game);
+            await PersistAndBroadcast(gameId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error selling hotel in game {GameId}", gameId);
+            _logger.LogError(ex, "[{Method}] Unhandled exception — gameId={GameId}", nameof(SellHotel), gameId);
             await Clients.Caller.SendAsync("Error", "Failed to sell hotel");
         }
     }
 
-    /// <summary>
-    /// Sells one house from the specified property, returning 50% of house cost to the player.
-    /// A hotel must be sold before houses can be sold.
-    /// </summary>
+    /// <summary>Sells one house from the specified property, returning 50% of house cost to the player.</summary>
     public async Task SellHouse(string gameId, int propertyId)
     {
         try
@@ -421,55 +472,63 @@ public class GameHub : Hub
             var (isPropValid, propErr) = _validator.ValidatePropertyId(propertyId);
             if (!isPropValid)
             {
-                await Clients.Caller.SendAsync("Error", propErr);
+                await SendError(nameof(SellHouse), gameId, propErr!);
                 return;
             }
 
-            var game = _roomManager.GetGame(gameId);
-            var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-            if (!isValid || currentPlayer == null || game == null)
+            string? errorMsg = null;
+
+            var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
             {
-                await Clients.Caller.SendAsync("Error", error);
-                return;
-            }
+                var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+                if (!valid)
+                {
+                    errorMsg = err;
+                    return;
+                }
 
-            var property = game.Board.GetProperty(propertyId);
-            if (property.OwnerId != currentPlayer.Id)
+                var property = g.Board.GetProperty(propertyId);
+                if (property.OwnerId != caller!.Id)
+                {
+                    errorMsg = "You do not own this property";
+                    return;
+                }
+
+                if (property.HasHotel)
+                {
+                    errorMsg = "Sell the hotel before selling houses";
+                    return;
+                }
+
+                if (property.HouseCount == 0)
+                {
+                    errorMsg = "This property has no houses to sell";
+                    return;
+                }
+
+                if (!engine.SellHouse(property))
+                {
+                    errorMsg = "Cannot sell house on this property";
+                }
+            });
+
+            if (!found)
             {
-                await Clients.Caller.SendAsync("Error", "You do not own this property");
+                await SendError(nameof(SellHouse), gameId, "Game or engine not available");
                 return;
             }
 
-            if (property.HasHotel)
+            if (errorMsg != null)
             {
-                await Clients.Caller.SendAsync("Error", "Sell the hotel before selling houses");
+                await SendError(nameof(SellHouse), gameId, errorMsg);
                 return;
             }
 
-            if (property.HouseCount == 0)
-            {
-                await Clients.Caller.SendAsync("Error", "This property has no houses to sell");
-                return;
-            }
-
-            var engine = _roomManager.GetGameEngine(gameId);
-            if (engine == null)
-            {
-                await Clients.Caller.SendAsync("Error", "Game engine not available");
-                return;
-            }
-
-            if (!engine.SellHouse(property))
-            {
-                await Clients.Caller.SendAsync("Error", "Cannot sell house on this property");
-                return;
-            }
-
-            await PersistAndBroadcast(gameId, game);
+            await PersistAndBroadcast(gameId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error selling house in game {GameId}", gameId);
+            _logger.LogError(ex, "[{Method}] Unhandled exception — gameId={GameId}", nameof(SellHouse), gameId);
             await Clients.Caller.SendAsync("Error", "Failed to sell house");
         }
     }
@@ -481,99 +540,115 @@ public class GameHub : Hub
     /// </summary>
     public async Task HandleJail(string gameId, bool useCard, bool payFine)
     {
-        var game = _roomManager.GetGame(gameId);
-        var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-        if (!isValid || currentPlayer == null || game == null)
-        {
-            await Clients.Caller.SendAsync("Error", error);
-            return;
-        }
+        string? errorMsg = null;
 
-        if (!currentPlayer.IsInJail)
+        var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
         {
-            await Clients.Caller.SendAsync("Error", "You are not in jail");
-            return;
-        }
-
-        var engine = _roomManager.GetGameEngine(gameId);
-        if (engine == null)
-        {
-            await Clients.Caller.SendAsync("Error", "Game engine not available");
-            return;
-        }
-
-        if (useCard)
-        {
-            if (!engine.UseGetOutOfJailFreeCard(currentPlayer))
+            var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+            if (!valid)
             {
-                await Clients.Caller.SendAsync("Error", "You do not have a Get Out of Jail Free card");
+                errorMsg = err;
                 return;
             }
-            // Player is now free — they must still call RollDice to move this turn
-        }
-        else if (payFine)
-        {
-            engine.ReleaseFromJail(currentPlayer, payToBail: true);
-            // Player is now free — they must still call RollDice to move this turn
-        }
-        else
-        {
-            // Roll attempt — engine.RollDice sets DoubleRolled before ReleaseFromJail reads it
-            var (_, _, total, isDouble, _) = engine.RollDice();
-            bool escaped = engine.ReleaseFromJail(currentPlayer, payToBail: false);
 
-            if (escaped)
+            if (!caller!.IsInJail)
             {
-                engine.MovePlayer(total);
+                errorMsg = "You are not in jail";
+                return;
+            }
 
-                if (isDouble)
+            if (useCard)
+            {
+                if (!engine.UseGetOutOfJailFreeCard(caller))
                 {
-                    // Jail-escape doubles do not grant an additional re-roll
-                    game.DoubleRolled = false;
+                    // Player is now free — they must still call RollDice to move this turn
+                    errorMsg = "You do not have a Get Out of Jail Free card";
                 }
             }
-            // else: still in jail, player calls EndTurn to finish their turn
+            else if (payFine)
+            {
+                
+                engine.ReleaseFromJail(caller, payToBail: true);
+                // Player is now free — they must still call RollDice to move this turn
+            }
+            else
+            {
+                // Roll attempt — engine.RollDice sets DoubleRolled before ReleaseFromJail reads it
+                var (dice1, dice2, total, isDouble, sentToJail) = engine.RollDice();
+                bool escaped = engine.ReleaseFromJail(caller, payToBail: false);
+                if (escaped)
+                {
+                    engine.MovePlayer(total);
+                    if (isDouble)
+                    {
+                        // Jail-escape doubles do not grant an additional re-roll
+                        g.DoubleRolled = false;
+                    }
+                }
+            }
+        });
+
+        if (!found)
+        {
+            await SendError(nameof(HandleJail), gameId, "Game or engine not available");
+            return;
         }
 
-        await PersistAndBroadcast(gameId, game);
+        if (errorMsg != null)
+        {
+            await SendError(nameof(HandleJail), gameId, errorMsg);
+            return;
+        }
+
+        await PersistAndBroadcast(gameId);
     }
 
     /// <summary>
-    /// Toggles the mortgage status of a property. Validates property ID before processing.
+    /// Toggles the mortgage status of a property.
     /// </summary>
     public async Task ToggleMortgage(string gameId, int propertyId)
     {
         var (isPropValid, propErr) = _validator.ValidatePropertyId(propertyId);
         if (!isPropValid)
         {
-            await Clients.Caller.SendAsync("Error", propErr);
+            await SendError(nameof(ToggleMortgage), gameId, propErr!);
             return;
         }
 
-        var game = _roomManager.GetGame(gameId);
-        var (isValid, currentPlayer, error) = VerifyCurrentPlayer(game);
-        if (!isValid || currentPlayer == null || game == null)
+        string? errorMsg = null;
+
+        var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
         {
-            await Clients.Caller.SendAsync("Error", error);
-            return;
-        }
+            var (valid, caller, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+            if (!valid)
+            {
+                errorMsg = err;
+                return;
+            }
 
-        var property = game.Board.GetProperty(propertyId);
-        if (property.OwnerId != currentPlayer.Id)
+            var property = g.Board.GetProperty(propertyId);
+            if (property.OwnerId != caller!.Id)
+            {
+                errorMsg = "You don't own this property";
+                return;
+            }
+
+            engine.ToggleMortgage(propertyId);
+        });
+
+        if (!found)
         {
-            await Clients.Caller.SendAsync("Error", "You don't own this property");
+            await SendError(nameof(ToggleMortgage), gameId, "Game or engine not available");
             return;
         }
 
-        var engine = _roomManager.GetGameEngine(gameId);
-        if (engine == null)
+        if (errorMsg != null)
         {
-            await Clients.Caller.SendAsync("Error", "Game engine not available");
+            await SendError(nameof(ToggleMortgage), gameId, errorMsg);
             return;
         }
 
-        engine.ToggleMortgage(propertyId);
-        await PersistAndBroadcast(gameId, game);
+        await PersistAndBroadcast(gameId);
     }
 
     /// <summary>
@@ -586,66 +661,67 @@ public class GameHub : Hub
         var caller = GetCallingPlayer(game);
         if (caller == null || game == null)
         {
-            await Clients.Caller.SendAsync("Error", "Unauthorized");
+            await SendError(nameof(ProposeTrade), gameId, "Unauthorized");
             return;
         }
 
         var (isCashValid, cashError) = _validator.ValidateTradeCash(offer.OfferedCash);
         if (!isCashValid)
         {
-            await Clients.Caller.SendAsync("Error", cashError);
+            await SendError(nameof(ProposeTrade), gameId, cashError!);
             return;
         }
 
         var (isReqCashValid, reqCashError) = _validator.ValidateTradeCash(offer.RequestedCash);
         if (!isReqCashValid)
         {
-            await Clients.Caller.SendAsync("Error", reqCashError);
+            await SendError(nameof(ProposeTrade), gameId, reqCashError!);
             return;
         }
 
         var (arePropsValid, propsError) = _validator.ValidateTradeProperties(offer.OfferedPropertyIds);
         if (!arePropsValid)
         {
-            await Clients.Caller.SendAsync("Error", propsError);
+            await SendError(nameof(ProposeTrade), gameId, propsError!);
             return;
         }
 
         var (areReqPropsValid, reqPropsError) = _validator.ValidateTradeProperties(offer.RequestedPropertyIds);
         if (!areReqPropsValid)
         {
-            await Clients.Caller.SendAsync("Error", reqPropsError);
+            await SendError(nameof(ProposeTrade), gameId, reqPropsError!);
             return;
         }
 
         var result = _tradeService.ProposeTrade(gameId, caller.Id, toPlayerId, offer);
         if (result == null)
         {
-            _logger.LogDebug(
-                "[BOT-TRADE] ProposeTrade returned null — trade was rejected by TradeService — gameId={GameId} fromId={FromId} toId={ToId}",
-                gameId, caller.Id, toPlayerId);
+            _logger.LogWarning(
+                "[{Method}] TradeService rejected trade — gameId={GameId} fromId={FromId} toId={ToId}",
+                nameof(ProposeTrade), gameId, caller.Id, toPlayerId);
             await Clients.Caller.SendAsync("Error",
                 "Trade could not be created — check that you own the offered properties and have sufficient cash.");
             return;
         }
 
         var target = game.GetPlayerById(toPlayerId);
-
         _logger.LogDebug("[BOT-TRADE] Trade {TradeId} proposed — from='{FromName}' to='{ToName}' isBot={IsBot}",
             result.Id, caller.Name, target?.Name, target?.IsBot);
 
-        // Persist before routing — bot reads from saved state, human gets a push notification
-        await PersistAndBroadcast(gameId, game);
+        await PersistAndBroadcast(gameId);
 
         if (target is { IsBot: true })
         {
-            _logger.LogDebug("[BOT-TRADE] Routing to TryScheduleBotTradeResponse — botId={BotId}", toPlayerId);
             _botOrchestrator.TryScheduleBotTradeResponse(gameId, toPlayerId);
         }
         else if (target?.ConnectionId != null)
         {
-            await Clients.Client(target.ConnectionId)
-                .SendAsync("TradeProposed", SerializeTradeOffer(result, game));
+            var fresh = _roomManager.GetGame(gameId);
+            if (fresh != null)
+            {
+                await Clients.Client(target.ConnectionId)
+                    .SendAsync("TradeProposed", SerializeTradeOffer(result, fresh));
+            }
         }
     }
 
@@ -658,6 +734,7 @@ public class GameHub : Hub
         var caller = GetCallingPlayer(game);
         if (caller == null || game == null)
         {
+            _logger.LogWarning("[{Method}] Caller not found in game — gameId={GameId}", nameof(RespondToTrade), gameId);
             return;
         }
 
@@ -665,10 +742,15 @@ public class GameHub : Hub
             ? _tradeService.AcceptTrade(gameId, tradeId, caller.Id)
             : _tradeService.RejectTrade(gameId, tradeId, caller.Id);
 
-        if (success)
+        if (!success)
         {
-            await PersistAndBroadcast(gameId, game);
+            _logger.LogWarning(
+                "[{Method}] Trade response failed — gameId={GameId} tradeId={TradeId} accept={Accept} playerId={PlayerId}",
+                nameof(RespondToTrade), gameId, tradeId, accept, caller.Id);
+            return;
         }
+
+        await PersistAndBroadcast(gameId);
     }
 
     /// <summary>
@@ -677,40 +759,49 @@ public class GameHub : Hub
     /// </summary>
     public async Task EndTurn(string gameId)
     {
-        var game = _roomManager.GetGame(gameId);
-        var (isValid, player, error) = VerifyCurrentPlayer(game);
-        if (!isValid || game == null || player == null)
+        string? errorMsg = null;
+
+        var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
         {
-            await Clients.Caller.SendAsync("Error", error);
+            var (valid, player, err) = VerifyCurrentPlayer(g, Context.ConnectionId);
+            if (!valid)
+            {
+                errorMsg = err;
+                return;
+            }
+
+            if (!player!.HasRolledDice)
+            {
+                errorMsg = "You must roll the dice before ending your turn.";
+                return;
+            }
+
+            if (g.Players.Where(p => !p.IsBankrupt).Count() <= 1)
+            {
+                errorMsg = "Game has ended";
+                return;
+            }
+
+            engine.NextTurn();
+        });
+
+        if (!found)
+        {
+            await SendError(nameof(EndTurn), gameId, "Game or engine not available");
             return;
         }
 
-        if (!player.HasRolledDice)
+        if (errorMsg != null)
         {
-            await Clients.Caller.SendAsync("Error", "You must roll the dice before ending your turn.");
+            await SendError(nameof(EndTurn), gameId, errorMsg);
             return;
         }
 
-        var activePlayers = game.Players.Where(p => !p.IsBankrupt).ToList();
-        if (activePlayers.Count <= 1)
-        {
-            await Clients.Caller.SendAsync("Error", "Game has ended");
-            return;
-        }
-
-        var engine = _roomManager.GetGameEngine(gameId);
-        if (engine == null)
-        {
-            await Clients.Caller.SendAsync("Error", "Game engine not available");
-            return;
-        }
-
-        engine.NextTurn();
-        await PersistAndBroadcast(gameId, game);
+        await PersistAndBroadcast(gameId);
     }
 
     /// <summary>
-    /// Marks players as disconnected and records the timestamp for potential cleanup or timeouts.
+    /// Marks the disconnecting player as offline and persists the state change.
     /// </summary>
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
@@ -719,10 +810,15 @@ public class GameHub : Hub
 
         if (game != null)
         {
-            var player = game.Players.First(p => p.ConnectionId == Context.ConnectionId);
-            player.IsConnected = false;
-            player.DisconnectedAt = DateTime.UtcNow;
-            await PersistAndBroadcast(game.GameId, game);
+            var playerId = game.Players.First(p => p.ConnectionId == Context.ConnectionId).Id;
+            _roomManager.MarkPlayerDisconnected(playerId);
+            await PersistAndBroadcast(game.GameId);
+        }
+
+        if (exception != null)
+        {
+            _logger.LogWarning(exception, "Client disconnected with error — connectionId={ConnectionId}",
+                Context.ConnectionId);
         }
 
         await base.OnDisconnectedAsync(exception);
@@ -733,42 +829,50 @@ public class GameHub : Hub
     /// </summary>
     public async Task ResignPlayer(string gameId)
     {
-        var game = _roomManager.GetGame(gameId);
-        if (game == null)
+        if (_roomManager.GetGame(gameId) == null)
         {
-            await Clients.Caller.SendAsync("Error", "Game not found");
+            await SendError(nameof(ResignPlayer), gameId, "Game not found");
             return;
         }
 
-        var caller = GetCallingPlayer(game);
-        if (caller == null)
+        string? errorMsg = null;
+
+        var found = _roomManager.ExecuteWithEngine(gameId, (g, engine) =>
         {
-            await Clients.Caller.SendAsync("Error", "Unauthorized");
+            var caller = GetCallingPlayer(g);
+            if (caller == null)
+            {
+                errorMsg = "Unauthorized";
+                return;
+            }
+
+            if (g.Status != GameStatus.InProgress)
+            {
+                errorMsg = "Game is not in progress";
+                return;
+            }
+
+            engine.ResignPlayer(caller.Id);
+
+            if (g.GetCurrentPlayer()?.Id == caller.Id || g.GetCurrentPlayer() == null)
+            {
+                engine.NextTurn();
+            }
+        });
+
+        if (!found)
+        {
+            await SendError(nameof(ResignPlayer), gameId, "Game or engine not available");
             return;
         }
 
-        if (game.Status != GameStatus.InProgress)
+        if (errorMsg != null)
         {
-            await Clients.Caller.SendAsync("Error", "Game is not in progress");
+            await SendError(nameof(ResignPlayer), gameId, errorMsg);
             return;
         }
 
-        var engine = _roomManager.GetGameEngine(gameId);
-        if (engine == null)
-        {
-            await Clients.Caller.SendAsync("Error", "Game engine not available");
-            return;
-        }
-
-        engine.ResignPlayer(caller.Id);
-
-        // If it was this player's turn, advance to the next player
-        if (game.GetCurrentPlayer()?.Id == caller.Id || game.GetCurrentPlayer() == null)
-        {
-            engine.NextTurn();
-        }
-
-        await PersistAndBroadcast(gameId, game);
+        await PersistAndBroadcast(gameId);
     }
 
     /// <summary>
@@ -776,127 +880,158 @@ public class GameHub : Hub
     /// </summary>
     public async Task KickPlayer(string gameId, string playerId)
     {
-        var game = _roomManager.GetGame(gameId);
-        if (game == null)
+        if (_roomManager.GetGame(gameId) == null)
         {
+            _logger.LogWarning("[{Method}] Game not found — gameId={GameId}", nameof(KickPlayer), gameId);
             throw new HubException("Game not found");
         }
 
-        var caller = GetCallingPlayer(game);
-        if (caller == null || caller.Id != game.HostId)
-        {
-            throw new HubException("Only the host can kick players");
-        }
+        string? kickedConnectionId = null;
+        string? errorMsg = null;
 
-        var target = game.Players.FirstOrDefault(p => p.Id == playerId)
-                     ?? throw new HubException("Player not found");
-
-        if (target.Id == caller.Id)
+        var found = _roomManager.MutateGame(gameId, (g, engine) =>
         {
-            throw new HubException("Host cannot kick themselves");
-        }
-
-        if (game.Status == GameStatus.Waiting)
-        {
-            game.Players.Remove(target);
-            game.LogAction($"{target.Name} was kicked by the host.");
-        }
-        else if (game.Status == GameStatus.InProgress)
-        {
-            var engine = _roomManager.GetGameEngine(gameId);
-            if (engine != null)
+            var caller = GetCallingPlayer(g);
+            if (caller == null || caller.Id != g.HostId)
             {
-                engine.ResignPlayer(target.Id);
-                if (game.GetCurrentPlayer()?.Id == target.Id || game.GetCurrentPlayer() == null)
+                errorMsg = "Only the host can kick players";
+                return;
+            }
+
+            var target = g.Players.FirstOrDefault(p => p.Id == playerId);
+            if (target == null)
+            {
+                errorMsg = "Player not found";
+                return;
+            }
+
+            if (target.Id == caller.Id)
+            {
+                errorMsg = "Host cannot kick themselves";
+                return;
+            }
+
+            kickedConnectionId = target.ConnectionId;
+
+            if (g.Status == GameStatus.Waiting)
+            {
+                g.Players.Remove(target);
+                g.LogAction($"{target.Name} was kicked by the host.");
+            }
+            else if (g.Status == GameStatus.InProgress)
+            {
+                if (engine != null)
                 {
-                    engine.NextTurn();
+                    engine.ResignPlayer(target.Id);
+                    if (g.GetCurrentPlayer()?.Id == target.Id || g.GetCurrentPlayer() == null)
+                    {
+                        engine.NextTurn();
+                    }
+                }
+                else
+                {
+                    target.IsBankrupt = true;
+                    target.IsConnected = false;
+                }
+
+                g.LogAction($"{target.Name} was removed by the host.");
+
+                var activePlayers = g.Players.Where(p => !p.IsBankrupt).ToList();
+                if (activePlayers.Count <= 1)
+                {
+                    g.Status = GameStatus.Finished;
+                    g.FinishedAt = DateTime.UtcNow;
+                    g.WinnerId = activePlayers.FirstOrDefault()?.Id;
                 }
             }
             else
             {
-                target.IsBankrupt = true;
-                target.IsConnected = false;
+                errorMsg = "Cannot kick players in this game state";
             }
+        });
 
-            game.LogAction($"{target.Name} was removed by the host.");
-
-            var activePlayers = game.Players.Where(p => !p.IsBankrupt).ToList();
-            if (activePlayers.Count <= 1)
-            {
-                game.Status = GameStatus.Finished;
-                game.FinishedAt = DateTime.UtcNow;
-                game.WinnerId = activePlayers.FirstOrDefault()?.Id;
-            }
-        }
-        else
+        if (!found || errorMsg != null)
         {
-            throw new HubException("Cannot kick players in this game state");
+            var reason = !found ? "Game vanished before kick could complete" : errorMsg!;
+            _logger.LogWarning("[{Method}] Kick failed — gameId={GameId} playerId={PlayerId} reason={Reason}",
+                nameof(KickPlayer), gameId, playerId, reason);
+            throw new HubException(reason);
         }
 
-        if (target.ConnectionId != null)
+        if (kickedConnectionId != null)
         {
-            await Clients.Client(target.ConnectionId).SendAsync("Kicked", "You were removed by the host");
+            await Clients.Client(kickedConnectionId).SendAsync("Kicked", "You were removed by the host");
         }
 
-        _logger.LogInformation("Host {HostName} kicked player {PlayerName} from game {GameId}", caller.Name,
-            target.Name, gameId);
-        await PersistAndBroadcast(gameId, game);
+        await PersistAndBroadcast(gameId);
     }
 
     /// <summary>
-    /// Adds bots to a waiting game. Caller must be the host; no admin key required.
+    /// Adds bots to a waiting game. Caller must be the host.
     /// </summary>
     public async Task AddBots(string gameId, int count = 1)
     {
-        var game = _roomManager.GetGame(gameId);
-        if (game == null)
+        if (_roomManager.GetGame(gameId) == null)
         {
+            _logger.LogWarning("[{Method}] Game not found — gameId={GameId}", nameof(AddBots), gameId);
             throw new HubException("Game not found");
         }
 
-        var caller = GetCallingPlayer(game);
-        if (caller == null || caller.Id != game.HostId)
+        string? errorMsg = null;
+
+        var found = _roomManager.MutateGame(gameId, (g, _) =>
         {
-            throw new HubException("Only the host can add bots");
-        }
-
-        if (game.Status != GameStatus.Waiting)
-        {
-            throw new HubException("Bots can only be added while the game is in the lobby");
-        }
-
-        int available = GameConstants.MaxPlayers - game.Players.Count;
-        if (available <= 0)
-        {
-            throw new HubException("Lobby is full");
-        }
-
-        int toAdd = Math.Min(Math.Max(count, 1), available);
-
-        int nextBotNumber = game.Players
-            .Where(p => p.IsBot)
-            .Select(p =>
+            var caller = GetCallingPlayer(g);
+            if (caller == null || caller.Id != g.HostId)
             {
-                var parts = p.Name.Split(' ');
-                return parts.Length == 2 && int.TryParse(parts[1], out int n) ? n : 0;
-            })
-            .DefaultIfEmpty(0)
-            .Max() + 1;
+                errorMsg = "Only the host can add bots";
+                return;
+            }
 
-        for (int i = 0; i < toAdd; i++)
-        {
-            var botName = $"Bot {nextBotNumber++}";
-            game.Players.Add(new Player(Guid.NewGuid().ToString(), botName)
+            if (g.Status != GameStatus.Waiting)
             {
-                IsBot = true,
-                IsConnected = true,
-                ConnectionId = null
-            });
-            game.LogAction($"{botName} joined the game as a bot.");
+                errorMsg = "Bots can only be added while the game is in the lobby";
+                return;
+            }
+
+            int available = GameConstants.MaxPlayers - g.Players.Count;
+            if (available <= 0)
+            {
+                errorMsg = "Lobby is full";
+                return;
+            }
+
+            int toAdd = Math.Min(Math.Max(count, 1), available);
+            int nextBotNumber = g.Players
+                .Where(p => p.IsBot)
+                .Select(p =>
+                {
+                    var parts = p.Name.Split(' ');
+                    return parts.Length == 2 && int.TryParse(parts[1], out int n) ? n : 0;
+                })
+                .DefaultIfEmpty(0)
+                .Max() + 1;
+
+            for (int i = 0; i < toAdd; i++)
+            {
+                var botName = $"Bot {nextBotNumber++}";
+                g.Players.Add(new Player(Guid.NewGuid().ToString(), botName)
+                    { IsBot = true, IsConnected = true, ConnectionId = null });
+                g.LogAction($"{botName} joined the game as a bot.");
+            }
+
+            _logger.LogInformation("Host added {Count} bot(s) to game {GameId}", toAdd, gameId);
+        });
+
+        if (!found || errorMsg != null)
+        {
+            var reason = !found ? "Game vanished before bots could be added" : errorMsg!;
+            _logger.LogWarning("[{Method}] AddBots failed — gameId={GameId} reason={Reason}",
+                nameof(AddBots), gameId, reason);
+            throw new HubException(reason);
         }
 
-        _logger.LogInformation("Host added {Count} bot(s) to game {GameId}", toAdd, gameId);
-        await PersistAndBroadcast(gameId, game);
+        await PersistAndBroadcast(gameId);
     }
 
     // -------------------------------------------------------------------------
@@ -904,12 +1039,28 @@ public class GameHub : Hub
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Persists game state, broadcasts to all players in the group,
-    /// then schedules a bot turn if the next active player is a bot.
+    /// Sends an error to the caller and logs a warning with method and game context.
     /// </summary>
-    private async Task PersistAndBroadcast(string gameId, GameState game)
+    private async Task SendError(string method, string gameId, string message)
+    {
+        _logger.LogWarning("[{Method}] {Message} — gameId={GameId} connectionId={ConnectionId}",
+            method, message, gameId, Context.ConnectionId);
+        await Clients.Caller.SendAsync("Error", message);
+    }
+
+    /// <summary>
+    /// Persists game state, broadcasts to all players in the group, then schedules a bot turn if applicable.
+    /// </summary>
+    private async Task PersistAndBroadcast(string gameId)
     {
         await _roomManager.SaveGameAsync(gameId);
+        var game = _roomManager.GetGame(gameId);
+        if (game == null)
+        {
+            _logger.LogWarning("[PersistAndBroadcast] Game not found after save — gameId={GameId}", gameId);
+            return;
+        }
+
         await Clients.Group(gameId).SendAsync("GameStateUpdated", GameStateMapper.ToDto(game));
         _botOrchestrator.TryScheduleIfBotTurn(gameId, game);
     }
@@ -917,14 +1068,10 @@ public class GameHub : Hub
     /// <summary>
     /// Validates that the SignalR caller is the authorized player for the current turn.
     /// </summary>
-    private (bool isValid, Player? player, string? error) VerifyCurrentPlayer(GameState? game)
+    private static (bool isValid, Player? player, string? error) VerifyCurrentPlayer(
+        GameState game, string connectionId)
     {
-        if (game == null)
-        {
-            return (false, null, "Game not found");
-        }
-
-        var caller = GetCallingPlayer(game);
+        var caller = game.Players.FirstOrDefault(p => p.ConnectionId == connectionId);
         if (caller == null)
         {
             return (false, null, "Unauthorized");
@@ -944,14 +1091,9 @@ public class GameHub : Hub
     }
 
     /// <summary>
-    /// Maps a GameState to its broadcast DTO via the shared mapper.
+    /// Maps a trade offer to its DTO for broadcasting.
     /// </summary>
-    private static GameStateDto SerializeGameState(GameState game) => GameStateMapper.ToDto(game);
-
-    /// <summary>
-    /// Maps a trade offer to a DTO for broadcasting.
-    /// </summary>
-    private TradeOfferDto SerializeTradeOffer(TradeOffer t, GameState g) => new()
+    private static TradeOfferDto SerializeTradeOffer(TradeOffer t, GameState g) => new()
     {
         Id = t.Id,
         FromPlayerId = t.FromPlayerId,
