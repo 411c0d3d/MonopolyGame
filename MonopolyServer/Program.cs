@@ -5,6 +5,7 @@ using MonopolyServer.Game.Models.Enums;
 using MonopolyServer.Game.Services;
 using MonopolyServer.Hubs;
 using MonopolyServer.Infrastructure;
+using MonopolyServer.Infrastructure.Budget;
 
 namespace MonopolyServer;
 
@@ -23,7 +24,7 @@ public class Program
         {
             options.AddPolicy("AllowAll", policy =>
             {
-                policy.WithOrigins("http://localhost:5299")
+                policy.WithOrigins("http://localhost:5300")
                     .AllowAnyMethod()
                     .AllowAnyHeader()
                     .AllowCredentials();
@@ -35,6 +36,9 @@ public class Program
 
         // Auth — Entra External ID JWT validation, role-based authorization, claims enrichment
         builder.Services.AddGameAuth(builder.Configuration);
+
+        // Budget guard — free-tier consumption tracking and enforcement
+        builder.Services.AddBudgetGuard(builder.Configuration);
 
         // Game services — registers GameRoomManager and GameCleanupService
         builder.Services.AddGameServices();
@@ -57,6 +61,7 @@ public class Program
         var app = builder.Build();
 
         // Server-only Middleware
+        app.UseMiddleware<BudgetMiddleware>();
         app.UseRouting();
         app.UseCors("AllowAll");
 
@@ -70,10 +75,11 @@ public class Program
         // API Endpoints
         app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
-        app.MapGet("/api/games", (GameRoomManager rm) =>
-        {
-            return Results.Ok(rm.GetAllGames().Where(g => g.Status != GameStatus.Finished));
-        });
+        app.MapGet("/api/games",
+            (GameRoomManager rm) =>
+            {
+                return Results.Ok(rm.GetAllGames().Where(g => g.Status != GameStatus.Finished));
+            });
 
         // Added POST endpoint to solve your 405 error
         app.MapPost("/api/games", (GameRoomManager rm) =>
@@ -84,6 +90,7 @@ public class Program
 
         // Must complete before RunAsync — guarantees GameRoomManager is fully loaded
         // before GameCleanupService.ExecuteAsync fires on startup.
+        await app.InitializeBudgetContainerAsync();
         await app.InitializeGameManagerAsync();
 
         await app.RunAsync();

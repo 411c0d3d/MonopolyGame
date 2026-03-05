@@ -1,88 +1,56 @@
-/* globals useState, useEffect, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, React, ReactDOM, signalR */
+/* globals useState, useEffect, useCallback, useContext, Ctx, COLORS, SERVER_URL, gameHub, React */
 
-// components/home_page.js — depends on constants.js, signalr.js, header.js.
+// pages/home_page.js
 
 /**
- * Home page with browse/join/admin tabs and game creation flow.
- * @param {{ onCreateAndJoin: function, onJoin: function, onAdminLogin: function }} props
+ * Home page — browse open games or join by ID.
+ * Player name and admin role come from auth claims, not user input.
+ * @param {{ user: object, isAdmin: boolean, onCreateAndJoin: function, onJoin: function, onAdmin: function, onLogout: function }} props
  */
-function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
+function HomePage({user, isAdmin, onCreateAndJoin, onJoin, onAdmin, onLogout}) {
     const {toast} = useContext(Ctx);
-    const [playerName, setPlayerName] = useState('');
-    const [joinId, setJoinId] = useState('');
-    const [activeTab, setActiveTab] = useState('browse');
-    const [creating, setCreating] = useState(false);
-    const [games, setGames] = useState([]);
+    const [joinId, setJoinId]           = useState('');
+    const [activeTab, setActiveTab]     = useState('browse');
+    const [creating, setCreating]       = useState(false);
+    const [games, setGames]             = useState([]);
     const [initialLoading, setInitialLoading] = useState(false);
-    const [adminKey, setAdminKey] = useState('');
 
-    // Separate initial load (shows spinner) from background poll (silent update)
     const fetchGames = useCallback((silent = false) => {
-        if (!silent) {
-            setInitialLoading(true);
-        }
+        if (!silent) { setInitialLoading(true); }
         fetch(`${SERVER_URL}/api/games`)
             .then(r => r.json())
-            .then(data => {
-                setGames(data);
-                setInitialLoading(false);
-            })
-            .catch(() => {
-                setInitialLoading(false);
-            });
+            .then(data => { setGames(data); setInitialLoading(false); })
+            .catch(() => setInitialLoading(false));
     }, []);
 
     useEffect(() => {
-        if (activeTab !== 'browse') {
-            return;
-        }
+        if (activeTab !== 'browse') { return; }
         fetchGames(false);
         const interval = setInterval(() => fetchGames(true), 5000);
         return () => clearInterval(interval);
     }, [activeTab, fetchGames]);
 
     const handleCreate = () => {
-        if (!playerName.trim()) {
-            toast('Enter your name', 'error');
-            return;
-        }
         setCreating(true);
         fetch(`${SERVER_URL}/api/games`, {method: 'POST'})
             .then(r => r.json())
-            .then(data => {
-                onCreateAndJoin(data.gameId, playerName.trim());
-                setCreating(false);
-            })
-            .catch(() => {
-                toast('Could not reach server', 'error');
-                setCreating(false);
-            });
+            .then(data => { onCreateAndJoin(data.gameId); setCreating(false); })
+            .catch(() => { toast('Could not reach server', 'error'); setCreating(false); });
     };
 
     const handleJoinById = () => {
-        if (!playerName.trim()) {
-            toast('Enter your name', 'error');
-            return;
-        }
-        if (!joinId.trim()) {
-            toast('Enter a Game ID', 'error');
-            return;
-        }
-        onJoin(joinId.trim().toUpperCase(), playerName.trim());
+        if (!joinId.trim()) { toast('Enter a Game ID', 'error'); return; }
+        onJoin(joinId.trim().toUpperCase());
     };
 
-    const handleJoinListed = (gid) => {
-        if (!playerName.trim()) {
-            toast('Enter your name first', 'error');
-            return;
-        }
-        onJoin(gid, playerName.trim());
-    };
+    const tabs = ['browse', 'join', ...(isAdmin ? ['admin'] : [])];
 
     return (
         <div className="page-enter">
             <Header page="home"/>
             <div className="center" style={{padding: '28px 18px'}}>
+
+                {/* Hero */}
                 <div style={{textAlign: 'center', marginBottom: 32}}>
                     <div className="big-icon">🎲</div>
                     <h1 className="htitle">Play <span>Monopoly</span> Online</h1>
@@ -90,21 +58,29 @@ function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
                 </div>
 
                 <div style={{width: '100%', maxWidth: 520}}>
-                    <div className="card" style={{marginBottom: 12}}>
-                        <div className="ig" style={{marginBottom: 0}}>
-                            <label className="il">Your Name</label>
-                            <input
-                                className="input"
-                                placeholder="e.g. Bob"
-                                value={playerName}
-                                onChange={e => setPlayerName(e.target.value)}
-                                maxLength={20}
-                            />
+
+                    {/* Logged-in user identity card */}
+                    <div className="card" style={{marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12}}>
+                        <div className="pav" style={{background: COLORS[0], color: '#fff', flexShrink: 0}}>
+                            {(user?.name || '?')[0].toUpperCase()}
                         </div>
+                        <div style={{flex: 1, minWidth: 0}}>
+                            <div style={{fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                                {user?.name}
+                            </div>
+                            <div style={{fontSize: 11, color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                                {user?.email}
+                                {isAdmin && <span className="badge bg-yellow" style={{marginLeft: 6}}>Admin</span>}
+                            </div>
+                        </div>
+                        <button className="btn btn-ghost btn-sm" onClick={onLogout} style={{flexShrink: 0}}>
+                            Sign out
+                        </button>
                     </div>
 
+                    {/* Tab bar */}
                     <div style={{display: 'flex', gap: 5, marginBottom: 11}}>
-                        {['browse', 'join', 'admin'].map(tab => (
+                        {tabs.map(tab => (
                             <button
                                 key={tab}
                                 className={`btn btn-sm ${activeTab === tab ? 'btn-ink' : 'btn-ghost'}`}
@@ -115,17 +91,12 @@ function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
                         ))}
                     </div>
 
+                    {/* Browse tab */}
                     {activeTab === 'browse' && (
                         <div className="card">
-                            <div style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center',
-                                marginBottom: 13
-                            }}>
+                            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 13}}>
                                 <div className="slabel" style={{margin: 0}}>Open Games</div>
-                                <button className="btn btn-sm btn-ghost" onClick={() => fetchGames(false)}>↻ Refresh
-                                </button>
+                                <button className="btn btn-sm btn-ghost" onClick={() => fetchGames(false)}>↻ Refresh</button>
                             </div>
                             {initialLoading && (
                                 <div style={{display: 'flex', justifyContent: 'center', padding: 18}}>
@@ -139,23 +110,16 @@ function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
                             )}
                             <div className="game-browser">
                                 {games.map(game => (
-                                    <div key={game.gameId} className="game-row"
-                                         onClick={() => handleJoinListed(game.gameId)}>
+                                    <div key={game.gameId} className="game-row" onClick={() => onJoin(game.gameId)}>
                                         <div>
-                                            <code style={{
-                                                fontFamily: 'monospace',
-                                                fontWeight: 700,
-                                                letterSpacing: 2,
-                                                fontSize: 14
-                                            }}>
+                                            <code style={{fontFamily: 'monospace', fontWeight: 700, letterSpacing: 2, fontSize: 14}}>
                                                 {game.gameId}
                                             </code>
                                             <div style={{fontSize: 11, color: '#aaa', marginTop: 2}}>
-                                                Host: {game.hostName} &nbsp;·&nbsp; {game.playerCount}/{game.maxPlayers} players
+                                                Host: {game.hostName}&nbsp;·&nbsp;{game.playerCount}/{game.maxPlayers} players
                                             </div>
                                         </div>
-                                        <div
-                                            style={{marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center'}}>
+                                        <div style={{marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center'}}>
                                             <span className="badge bg-green">Waiting</span>
                                             <span style={{fontSize: 17}}>→</span>
                                         </div>
@@ -169,14 +133,14 @@ function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
                                 style={{marginTop: 10}}
                             >
                                 {creating
-                                    ? <span style={{display: 'flex', alignItems: 'center', gap: 7}}><div
-                                        className="spin"/>Creating…</span>
+                                    ? <span style={{display: 'flex', alignItems: 'center', gap: 7}}><div className="spin"/>Creating…</span>
                                     : '＋ Create New Game'
                                 }
                             </button>
                         </div>
                     )}
 
+                    {/* Join by ID tab */}
                     {activeTab === 'join' && (
                         <div className="card">
                             <div className="ig">
@@ -186,11 +150,7 @@ function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
                                     placeholder="e.g. AB12CD34"
                                     value={joinId}
                                     onChange={e => setJoinId(e.target.value.toUpperCase())}
-                                    onKeyDown={e => {
-                                        if (e.key === 'Enter') {
-                                            handleJoinById();
-                                        }
-                                    }}
+                                    onKeyDown={e => { if (e.key === 'Enter') { handleJoinById(); } }}
                                     style={{fontFamily: 'monospace', letterSpacing: 3, fontSize: 18}}
                                     maxLength={8}
                                 />
@@ -201,25 +161,14 @@ function HomePage({onCreateAndJoin, onJoin, onAdminLogin}) {
                         </div>
                     )}
 
+                    {/* Admin tab — only rendered when user has Admin role */}
                     {activeTab === 'admin' && (
                         <div className="card">
-                            <div className="ig">
-                                <label className="il">Admin Key</label>
-                                <input
-                                    className="input"
-                                    type="password"
-                                    placeholder="Enter admin key"
-                                    value={adminKey}
-                                    onChange={e => setAdminKey(e.target.value)}
-                                    onKeyDown={e => {
-                                        if (e.key === 'Enter') {
-                                            onAdminLogin(adminKey);
-                                        }
-                                    }}
-                                />
-                            </div>
-                            <button className="btn btn-ink btn-full" onClick={() => onAdminLogin(adminKey)}>
-                                ⚙ Enter Admin Panel
+                            <p style={{color: '#aaa', fontSize: 13, marginBottom: 14}}>
+                                You have admin access. Open the panel to manage games and server state.
+                            </p>
+                            <button className="btn btn-ink btn-full" onClick={onAdmin}>
+                                ⚙ Open Admin Panel
                             </button>
                         </div>
                     )}

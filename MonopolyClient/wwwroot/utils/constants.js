@@ -1,7 +1,29 @@
 /* globals React */
 // utils/constants.js — loaded first; defines all shared app globals.
 
-const SERVER_URL = 'http://localhost:5126';
+const SERVER_URL = 'http://localhost:5299';
+
+// ---------------------------------------------------------------------------
+// Auth — Microsoft Entra External ID (CIAM)
+// Update these values to match your app registration.
+// ---------------------------------------------------------------------------
+
+/** App registration client ID from the Entra External ID tenant. */
+window.MSAL_CLIENT_ID = '962f7297-974f-4752-bda4-7b1947a75ce1';
+
+/** CIAM authority URL — https://{tenant}.ciamlogin.com/{tenantId}/v2.0 */
+window.MSAL_AUTHORITY = 'https://12384f87-3250-4fe6-b8c4-a2b5a6692d7e.ciamlogin.com/12384f87-3250-4fe6-b8c4-a2b5a6692d7e/v2.0';
+/**
+ * OAuth scope requested for the access token sent to the SignalR hub.
+ * Must match the scope exposed on the app registration (Expose an API → Add a scope).
+ * Default: openid + profile + email covers basic OIDC claims.
+ * For a proper access token targeting the server add: api://{clientId}/access_as_user
+ */
+window.MSAL_SCOPE = `api://${window.MSAL_CLIENT_ID}/access_as_user`;
+
+// ---------------------------------------------------------------------------
+// Game constants
+// ---------------------------------------------------------------------------
 
 /** Player token colors, one per player slot (up to 8). */
 window.COLORS = [
@@ -73,11 +95,10 @@ const {
     createContext,
 } = React;
 
-// Make React hooks globally available
-window.useState = useState;
-window.useEffect = useEffect;
+window.useState    = useState;
+window.useEffect   = useEffect;
 window.useCallback = useCallback;
-window.useContext = useContext;
+window.useContext  = useContext;
 window.createContext = createContext;
 
 /** Shared React context providing the toast() function to all components. */

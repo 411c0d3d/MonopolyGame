@@ -1,25 +1,23 @@
-/* globals useState, useEffect, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, React, ReactDOM, signalR */
+/* globals useState, useEffect, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, authService, React, ReactDOM, signalR */
 
-// components/app.js — root component; depends on all other components.
+// app.js — root component; depends on all other components.
 
-/**
- * Thin wrapper that supplies the toast context to the component tree.
- * @param {{ value: any, children: any }} props
- */
+/** Thin wrapper that supplies the toast context to the component tree. */
 function AppProvider({value, children}) {
     return React.createElement(Ctx.Provider, {value}, children);
 }
 
-/** Root application component managing page routing and global hub subscriptions. */
+/** Root application component. Handles auth init, routing, and global hub subscriptions. */
 function App() {
-    const [page, setPage] = useState('home');
-    const [gameId, setGameId] = useState('');
-    const [playerName, setPlayerName] = useState('');
+    const [page, setPage]           = useState('loading'); // 'loading' | 'login' | 'home' | 'lobby' | 'game' | 'admin'
+    const [gameId, setGameId]       = useState('');
     const [gameState, setGameState] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [toasts, setToasts] = useState([]);
-    const [adminKey, setAdminKey] = useState('');
+    const [toasts, setToasts]       = useState([]);
     const [isCreator, setIsCreator] = useState(false);
+
+    // Derived from Entra claims — never manually entered.
+    const [user, setUser]       = useState(null); // { objectId, name, email }
+    const [isAdmin, setIsAdmin] = useState(false);
 
     const toast = useCallback((msg, type = 'info') => {
         const id = Date.now() + Math.random();
@@ -27,45 +25,88 @@ function App() {
         setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
     }, []);
 
+    // -------------------------------------------------------------------------
+    // Auth init — runs once on mount
+    // -------------------------------------------------------------------------
     useEffect(() => {
-        gameHub.start()
-            .then(() => toast('Connected', 'success'))
-            .catch(() => toast(`Cannot connect to ${SERVER_URL}`, 'error'))
-            .finally(() => setLoading(false));
+        authService.initialize().then(async account => {
+            if (!account) {
+                // Not authenticated — show login page
+                setPage('login');
+                return;
+            }
+
+            const currentUser = authService.getUser();
+            setUser(currentUser);
+
+            const admin = await authService.isAdmin();
+            setIsAdmin(admin);
+
+            // Start hub with JWT attached
+            gameHub.start()
+                .then(() => toast('Connected', 'success'))
+                .catch(() => toast(`Cannot connect to ${SERVER_URL}`, 'error'));
+
+            // Restore session game if user was in a game before refresh
+            const savedGameId = authService.getSessionGame();
+            if (savedGameId) {
+                setGameId(savedGameId);
+                gameHub.call('JoinGame', savedGameId)
+                    .then(() => setPage('lobby'))
+                    .catch(() => {
+                        authService.clearSessionGame();
+                        setPage('home');
+                    });
+            } else {
+                setPage('home');
+            }
+        });
 
         const unsubscribers = [
             gameHub.on('GameStateUpdated', state => setGameState(state)),
-            gameHub.on('Error', msg => toast(msg, 'error')),
+            gameHub.on('Error',       msg => toast(msg, 'error')),
             gameHub.on('Reconnecting', () => toast('Reconnecting…', 'info')),
-            gameHub.on('Reconnected', () => toast('Reconnected', 'success')),
-            gameHub.on('Closed', () => toast('Disconnected', 'error')),
-            gameHub.on('TurnWarning', ({ message }) => toast(`⏰ ${message}`, 'warning')),
+            gameHub.on('Reconnected',  () => {
+                toast('Reconnected', 'success');
+                // Rejoin group after transport reconnect
+                if (gameId) { gameHub.call('JoinGame', gameId).catch(() => {}); }
+            }),
+            gameHub.on('Closed',       () => toast('Disconnected', 'error')),
+            gameHub.on('TurnWarning', ({message}) => toast(`⏰ ${message}`, 'warning')),
+            gameHub.on('Kicked',      msg => {
+                toast(msg, 'error');
+                handleLeave();
+            }),
         ];
 
         return () => unsubscribers.forEach(fn => fn());
     }, []);
 
+    // Auto-advance lobby → game when server transitions status
     useEffect(() => {
         if (gameState?.status === 'InProgress' && page === 'lobby') {
             setPage('game');
         }
     }, [gameState?.status, page]);
 
-    const handleCreateAndJoin = (gid, name, botKey) => {
+    // -------------------------------------------------------------------------
+    // Handlers
+    // -------------------------------------------------------------------------
+
+    const handleCreateAndJoin = (gid) => {
         setGameId(gid);
-        setPlayerName(name);
         setIsCreator(true);
-        if (botKey && !adminKey) { setAdminKey(botKey); }
-        gameHub.call('JoinGame', gid, name)
+        authService.saveSessionGame(gid);
+        gameHub.call('JoinGame', gid)
             .then(() => setPage('lobby'))
             .catch(e => toast(e.message || 'Failed to join', 'error'));
     };
 
-    const handleJoin = (gid, name) => {
+    const handleJoin = (gid) => {
         setGameId(gid);
-        setPlayerName(name);
         setIsCreator(false);
-        gameHub.call('JoinGame', gid, name)
+        authService.saveSessionGame(gid);
+        gameHub.call('JoinGame', gid)
             .then(() => setPage('lobby'))
             .catch(e => toast(e.message || 'Failed to join', 'error'));
     };
@@ -78,54 +119,65 @@ function App() {
         setGameState(null);
         setGameId('');
         setIsCreator(false);
+        authService.clearSessionGame();
         setPage('home');
     };
 
-    const handleAdminLogin = (key) => {
-        setAdminKey(key);
-        setPage('admin');
-    };
+    // -------------------------------------------------------------------------
+    // Render
+    // -------------------------------------------------------------------------
+
+    if (page === 'loading') {
+        return (
+            <div className="cover">
+                <div className="spin" style={{width: 28, height: 28, borderWidth: 3}}/>
+                <div style={{fontSize: 13, color: '#aaa'}}>Authenticating…</div>
+            </div>
+        );
+    }
+
+    if (page === 'login') {
+        return <LoginPage onLogin={() => authService.login()}/>;
+    }
 
     return (
         <AppProvider value={{toast}}>
-            {loading && (
-                <div className="cover">
-                    <div className="spin" style={{width: 28, height: 28, borderWidth: 3}}/>
-                    <div style={{fontSize: 13, color: '#aaa'}}>Connecting to {SERVER_URL}…</div>
-                </div>
-            )}
-            {!loading && page === 'home' && (
+            {page === 'home' && (
                 <HomePage
+                    user={user}
+                    isAdmin={isAdmin}
                     onCreateAndJoin={handleCreateAndJoin}
                     onJoin={handleJoin}
-                    onAdminLogin={handleAdminLogin}
+                    onAdmin={() => setPage('admin')}
+                    onLogout={() => authService.logout()}
                 />
             )}
-            {!loading && page === 'lobby' && (
+            {page === 'lobby' && (
                 <LobbyPage
                     gameId={gameId}
-                    playerName={playerName}
+                    userId={user?.objectId}
+                    playerName={user?.name}
                     gameState={gameState}
                     onStart={handleStart}
                     onLeave={handleLeave}
                     isCreator={isCreator}
-                    isAdmin={!!adminKey}
+                    isAdmin={isAdmin}
                     onAdmin={() => setPage('admin')}
                 />
             )}
-            {!loading && page === 'game' && (
+            {page === 'game' && (
                 <GamePage
                     gameId={gameId}
-                    playerName={playerName}
+                    userId={user?.objectId}
+                    playerName={user?.name}
                     gameState={gameState}
                     onLeave={handleLeave}
-                    isAdmin={!!adminKey}
+                    isAdmin={isAdmin}
                     onAdmin={() => setPage('admin')}
-                    adminKey={adminKey}
                 />
             )}
-            {!loading && page === 'admin' && (
-                <AdminPage adminKey={adminKey} onBack={() => setPage(gameId ? 'game' : 'home')}/>
+            {page === 'admin' && (
+                <AdminPage onBack={() => setPage(gameId ? 'game' : 'home')}/>
             )}
             <Toasts list={toasts}/>
         </AppProvider>
