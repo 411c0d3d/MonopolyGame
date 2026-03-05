@@ -11,26 +11,34 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.5/signalr.min.js"></script>
 
+    <!-- MSAL v3 — required for PublicClientApplication.initialize() -->
+    <script src="https://unpkg.com/@azure/msal-browser@3.28.1/lib/msal-browser.min.js"></script>
+
     <link rel="stylesheet" href="css/main.css"/>
-    <link rel="stylesheet" href="animation/animation.css" />
-    <link rel="stylesheet" href="animation/dice3d.css" />
+    <link rel="stylesheet" href="animation/animation.css"/>
+    <link rel="stylesheet" href="animation/dice3d.css"/>
 </head>
 <body>
 <div id="root"></div>
 
 <!--
     Load order is critical — each file relies on globals declared before it.
+    constants.js must be first (defines MSAL_CLIENT_ID, MSAL_AUTHORITY, MSAL_SCOPE, React hooks, Ctx).
+    auth_service.js must come before hub_service.js (hub uses authService.getToken).
+    login_page.js must come before app.js.
     Babel transpiles JSX at runtime via type="text/babel".
 -->
 <script type="text/babel" src="animation/animation.js"></script>
 <script type="text/babel" src="animation/dice3d.js"></script>
 <script type="text/babel" src="utils/constants.js"></script>
+<script type="text/babel" src="utils/auth_service.js"></script>
 <script type="text/babel" src="utils/hub_service.js"></script>
 <script type="text/babel" src="components/header.js"></script>
 <script type="text/babel" src="components/modals.js"></script>
 <script type="text/babel" src="components/toasts.js"></script>
 <script type="text/babel" src="components/board.js"></script>
 <script type="text/babel" src="components/turn_timer.js"></script>
+<script type="text/babel" src="pages/login_page.js"></script>
 <script type="text/babel" src="pages/home_page.js"></script>
 <script type="text/babel" src="pages/lobby_page.js"></script>
 <script type="text/babel" src="pages/game_page.js"></script>

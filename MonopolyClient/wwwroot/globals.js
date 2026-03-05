@@ -8,7 +8,7 @@
 
 // ─── React / ReactDOM UMD globals ────────────────────────────────────────────
 
-const {React} = window;
+const { React } = window;
 
 const {
     useState,
@@ -16,6 +16,9 @@ const {
     useRef,
     useCallback,
     useContext,
+    useReducer,
+    useMemo,
+    createContext,
 } = React;
 
 // ─── SignalR UMD global ───────────────────────────────────────────────────────
@@ -31,16 +34,16 @@ const {
  * }} SignalRLogLevel
  *
  * @typedef {{
- *   withUrl(u:string):SignalRHubConnectionBuilder,
+ *   withUrl(u:string, options?:object):SignalRHubConnectionBuilder,
  *   withAutomaticReconnect(r?:number[]):SignalRHubConnectionBuilder,
  *   configureLogging(l:any):SignalRHubConnectionBuilder,
  *   build():SignalRHubConnection
  * }} SignalRHubConnectionBuilder
  *
  * @typedef {{
- *   on(e:string,fn:Function):void,
- *   off(e:string,fn:Function):void,
- *   invoke(m:string,...a:any[]):Promise<any>,
+ *   on(e:string, fn:Function):void,
+ *   off(e:string, fn:Function):void,
+ *   invoke(m:string, ...a:any[]):Promise<any>,
  *   onreconnecting(fn:Function):void,
  *   onreconnected(fn:Function):void,
  *   onclose(fn:Function):void,
@@ -49,14 +52,32 @@ const {
  * }} SignalRHubConnection
  */
 
-/** @type {{
- * LogLevel: SignalRLogLevel,
- * HubConnectionState,
- * HubConnectionBuilder: { new(): SignalRHubConnectionBuilder }
- * }} 
+/** @type {{ LogLevel:SignalRLogLevel, HubConnectionState:any, HubConnectionBuilder:{ new():SignalRHubConnectionBuilder } }} */
+const signalR = window.signalR;
+
+// ─── MSAL UMD global ─────────────────────────────────────────────────────────
+
+/**
+ * @typedef {{
+ *   initialize():Promise<void>,
+ *   handleRedirectPromise():Promise<{account:MsalAccount}|null>,
+ *   getAllAccounts():MsalAccount[],
+ *   setActiveAccount(a:MsalAccount):void,
+ *   acquireTokenSilent(r:object):Promise<{accessToken:string}>,
+ *   acquireTokenPopup(r:object):Promise<{accessToken:string, account:MsalAccount}>,
+ *   loginRedirect(r:object):Promise<void>,
+ *   logoutRedirect(r:object):Promise<void>
+ * }} MsalPublicClientApplication
+ *
+ * @typedef {{
+ *   localAccountId:string,
+ *   name:string,
+ *   username:string
+ * }} MsalAccount
  */
 
-const signalR = window.signalR;
+/** @type {{ PublicClientApplication:{ new(config:object):MsalPublicClientApplication }, InteractionRequiredAuthError:{ new(...a:any[]):Error } }} */
+const msal = window.msal;
 
 // ─── Server response shapes ───────────────────────────────────────────────────
 
@@ -66,6 +87,7 @@ const signalR = window.signalR;
  *   name:string,
  *   cash:number,
  *   position:number,
+ *   colorIndex:number,
  *   isConnected:boolean,
  *   isInJail:boolean,
  *   isBankrupt:boolean,
@@ -80,19 +102,18 @@ const signalR = window.signalR;
  * @typedef {{
  *   id:number,
  *   name:string,
+ *   group:string,
  *   ownerId:string|null,
  *   purchasePrice:number,
  *   isMortgaged:boolean,
  *   houseCount:number,
- *   hasHotel:boolean
+ *   hasHotel:boolean,
  *   houseCost:number,
- *   boardSpaces:number,
+ *   boardSpaces:number
  * }} BoardProperty
  */
 
 /**
- * Unified GameState definition (merged, no duplication)
- *
  * @typedef {{
  *   gameId:string,
  *   hostId:string,
@@ -104,13 +125,12 @@ const signalR = window.signalR;
  *   turn:number,
  *   eventLog:string[],
  *   doubleRolled?:boolean,
- *   currentTurnStartedAt:number,
+ *   lastDice?:number[],
+ *   currentTurnStartedAt:number
  * }} GameState
  */
 
 /**
- * Game list item (for /api/games)
- *
  * @typedef {{
  *   gameId:string,
  *   hostName:string,
@@ -121,9 +141,6 @@ const signalR = window.signalR;
  */
 
 /**
- * Admin-specific game details projection
- * Used by AdminPage via SignalR ("GameDetails")
- *
  * @typedef {{
  *   gameId:string,
  *   status:string,
@@ -135,11 +152,11 @@ const signalR = window.signalR;
  */
 
 /**
- * Trade offer DTO
- *
  * @typedef {{
  *   id:string,
+ *   fromPlayerId:string,
  *   fromPlayerName:string,
+ *   toPlayerId:string,
  *   offeredCash:number,
  *   requestedCash:number,
  *   offeredPropertyIds:number[],
@@ -149,10 +166,34 @@ const signalR = window.signalR;
 
 // ─── App globals (defined in utils/constants.js) ─────────────────────────────
 
-/** @type {{ createRoot: function(Element): { render: function(*): void } }} */
+/** @type {{ createRoot:function(Element):{ render:function(*):void } }} */
 const ReactDOM = window.ReactDOM;
 
-// ─── App globals (defined in utils/signalr.js) ───────────────────────────────
+/** @type {any} */
+const Ctx = window.Ctx;
+
+/** @type {string} */
+const SERVER_URL = window.SERVER_URL;
+
+/** @type {string} */
+const MSAL_CLIENT_ID = window.MSAL_CLIENT_ID;
+
+/** @type {string} */
+const MSAL_AUTHORITY = window.MSAL_AUTHORITY;
+
+/** @type {string} */
+const MSAL_SCOPE = window.MSAL_SCOPE;
+
+/** @type {string[]} */
+const COLORS = window.COLORS;
+
+/** @type {string[]} */
+const BCOLORS = window.BCOLORS;
+
+/** @type {object} */
+const SPACES = window.SPACES;
+
+// ─── App globals (defined in utils/hub_service.js and utils/auth_service.js) ─
 
 /**
  * @typedef {{
@@ -163,4 +204,22 @@ const ReactDOM = window.ReactDOM;
  */
 
 /** @type {IGameHub} */
-window.gameHub = gameHub;
+const gameHub = window.gameHub;
+
+/**
+ * @typedef {{
+ *   initialize():Promise<MsalAccount|null>,
+ *   isAuthenticated():boolean,
+ *   getUser():{ objectId:string, name:string, email:string }|null,
+ *   getToken():Promise<string|null>,
+ *   isAdmin():Promise<boolean>,
+ *   login():Promise<void>,
+ *   logout():Promise<void>,
+ *   saveSessionGame(gameId:string):void,
+ *   getSessionGame():string|null,
+ *   clearSessionGame():void
+ * }} IAuthService
+ */
+
+/** @type {IAuthService} */
+let authService = window.authService;

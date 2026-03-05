@@ -1,41 +1,34 @@
-/* globals useState, useEffect, useCallback, useContext, createContext, Ctx, COLORS, BCOLORS, SPACES, SERVER_URL, gameHub, React, ReactDOM, signalR */
+/* globals useState, useEffect, useContext, Ctx, COLORS, gameHub, React */
 
-// components/lobby_page.js — depends on constants.js, header.js.
+// pages/lobby_page.js
 
 /**
  * Pre-game lobby showing players, settings, and the start button.
- * Host can add bots via admin key.
- * @param {{ gameId: string, playerName: string, gameState: any, onStart: function, onLeave: function, isCreator: boolean, isAdmin: boolean, onAdmin: function }} props
+ * @param {{ gameId: string, userId: string, playerName: string, gameState: any, onStart: function, onLeave: function, isCreator: boolean, isAdmin: boolean, onAdmin: function }} props
  */
-function LobbyPage({gameId, playerName, gameState: initialGameState, onStart, onLeave, isCreator, isAdmin, onAdmin}) {
+function LobbyPage({gameId, userId, playerName, gameState: initialGameState, onStart, onLeave, isCreator, isAdmin, onAdmin}) {
     const {toast} = useContext(Ctx);
-    // Maintain local state so we stay in sync with hub updates independent of parent re-renders
     const [gameState, setGameState] = useState(initialGameState);
-    const [copied, setCopied] = useState(false);
-    const [botCount, setBotCount] = useState(1);
+    const [copied, setCopied]       = useState(false);
+    const [botCount, setBotCount]   = useState(1);
     const [addingBots, setAddingBots] = useState(false);
 
-    // Keep local state in sync when parent passes a fresh snapshot (e.g. on initial load)
     useEffect(() => {
-        if (initialGameState) {
-            setGameState(initialGameState);
-        }
+        if (initialGameState) { setGameState(initialGameState); }
     }, [initialGameState]);
 
-    // Subscribe directly to hub so lobby always reflects latest player list
     useEffect(() => {
         const unsub = gameHub.on('GameStateUpdated', state => {
-            if (state.gameId === gameId) {
-                setGameState(state);
-            }
+            if (state.gameId === gameId) { setGameState(state); }
         });
         return unsub;
     }, [gameId]);
 
     const players = gameState?.players || [];
-    const hostId = gameState?.hostId;
-    const me = players.find(p => p.name === playerName);
-    const isHost = isCreator || !!(me && me.id === hostId);
+    const hostId  = gameState?.hostId;
+
+    // Host check uses objectId (B2C persistent identity), not name.
+    const isHost = isCreator || userId === hostId;
 
     const handleCopy = () => {
         navigator.clipboard.writeText(gameId).then(() => {
@@ -44,21 +37,15 @@ function LobbyPage({gameId, playerName, gameState: initialGameState, onStart, on
         });
     };
 
-    /** Kicks a non-host player; host identity verified server-side by connection ID. */
     const handleKick = (player) => {
         if (!confirm(`Kick ${player.name}?`)) { return; }
         gameHub.call('KickPlayer', gameId, player.id)
             .catch(e => toast(e.message || 'Failed to kick player', 'error'));
     };
 
-    /** Asks the server to add bots; host identity is verified server-side by connection ID. */
     const handleAddBots = () => {
         const available = 8 - players.length;
-        if (available <= 0) {
-            toast('Lobby is full', 'error');
-            return;
-        }
-
+        if (available <= 0) { toast('Lobby is full', 'error'); return; }
         setAddingBots(true);
         gameHub.call('AddBots', gameId, Math.min(botCount, available))
             .then(() => toast(`${Math.min(botCount, available)} bot(s) added`, 'success'))
@@ -76,14 +63,7 @@ function LobbyPage({gameId, playerName, gameState: initialGameState, onStart, on
 
                     <div className="gid-box">
                         <div>
-                            <div style={{
-                                fontSize: 10,
-                                fontWeight: 700,
-                                textTransform: 'uppercase',
-                                letterSpacing: 1,
-                                color: '#bbb',
-                                marginBottom: 3
-                            }}>
+                            <div style={{fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, color: '#bbb', marginBottom: 3}}>
                                 Game ID
                             </div>
                             <div className="gid-code">{gameId}</div>
@@ -107,10 +87,8 @@ function LobbyPage({gameId, playerName, gameState: initialGameState, onStart, on
                                     </div>
                                 </div>
                                 {player.id === hostId && <span className="badge bg-yellow">👑 Host</span>}
-                                {player.name === playerName && (
-                                    <span className="badge bg-blue">You</span>
-                                )}
-                                {isHost && player.id !== hostId && (
+                                {player.id === userId  && <span className="badge bg-blue">You</span>}
+                                {isHost && player.id !== hostId && !player.isBot && (
                                     <button
                                         className="btn btn-ghost btn-sm"
                                         style={{fontSize: 11, padding: '2px 8px', color: '#e55', borderColor: '#e55'}}
@@ -139,23 +117,16 @@ function LobbyPage({gameId, playerName, gameState: initialGameState, onStart, on
                             ['Starting cash', '$1,500'],
                             ['Turn timer', '90s'],
                         ].map(([label, value]) => (
-                            <div key={label} style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                fontSize: 13,
-                                marginBottom: 7
-                            }}>
+                            <div key={label} style={{display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 7}}>
                                 <span style={{color: '#999'}}>{label}</span>
                                 <strong>{value}</strong>
                             </div>
                         ))}
                     </div>
 
-                    {/* Bot panel — host only */}
                     {isHost && players.length < 8 && (
                         <div className="card" style={{marginBottom: 11}}>
-                            <div style={{fontSize: 12, fontWeight: 700, marginBottom: 10, color: '#777'}}>🤖 Add Bots
-                            </div>
+                            <div style={{fontSize: 12, fontWeight: 700, marginBottom: 10, color: '#777'}}>🤖 Add Bots</div>
                             <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10}}>
                                 <button className="btn btn-ghost btn-sm" style={{padding: '3px 10px', fontSize: 15}}
                                         onClick={() => setBotCount(c => Math.max(1, c - 1))}>−
@@ -173,8 +144,7 @@ function LobbyPage({gameId, playerName, gameState: initialGameState, onStart, on
                                 disabled={addingBots}
                             >
                                 {addingBots
-                                    ? <span style={{display: 'flex', alignItems: 'center', gap: 6}}><div
-                                        className="spin"/>Adding…</span>
+                                    ? <span style={{display: 'flex', alignItems: 'center', gap: 6}}><div className="spin"/>Adding…</span>
                                     : '+ Add Bots'
                                 }
                             </button>
@@ -193,13 +163,7 @@ function LobbyPage({gameId, playerName, gameState: initialGameState, onStart, on
                             }
                         </button>
                     ) : (
-                        <div style={{
-                            textAlign: 'center',
-                            padding: 16,
-                            border: '1.5px solid var(--border)',
-                            borderRadius: 12,
-                            background: '#fff'
-                        }}>
+                        <div style={{textAlign: 'center', padding: 16, border: '1.5px solid var(--border)', borderRadius: 12, background: '#fff'}}>
                             <div className="spin" style={{margin: '0 auto 9px'}}/>
                             <div style={{fontSize: 13, color: '#aaa'}}>Waiting for host to start…</div>
                         </div>
