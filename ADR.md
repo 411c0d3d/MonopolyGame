@@ -4,9 +4,10 @@
 
 Multiplayer Monopoly built on ASP.NET Core 10 with a SignalR hub and a React client served through a static HTML shell.
 Complete game engine covering all classic rules — card system, trading, jail, rent, and buildings. Active game state is
-held in memory for performance and persistance is swappable between repository layer with — either Azure Cosmos DB for production or JSON files for local
-development via App settings. Authentication is handled by Microsoft Entra External ID with social
-login (Google, Microsoft). Admin access is enforced by a role claim.
+held in memory for performance and persistence is swappable between repository implementations — either Azure Cosmos DB
+for production or JSON files for local development via app settings. Authentication is handled by Microsoft Entra
+External ID with social login (Google, Microsoft). Admin access is enforced by a role claim. A budget guard service
+enforces Azure Container Apps free-tier consumption limits and persists monthly counters to Cosmos DB.
 
 ---
 
@@ -62,6 +63,12 @@ MonopolyServer/
 │   │   ├── IUserRepository.cs       # User persistence contract
 │   │   ├── UserClaimsTransformation.cs  # Enriches principal with Admin role from Cosmos
 │   │   └── UserDocument.cs          # Cosmos user document (id = B2C objectId)
+│   ├── Budget/
+│   │   ├── BudgetDocument.cs        # Cosmos document tracking monthly resource consumption
+│   │   ├── BudgetGuardService.cs    # BackgroundService — in-memory counters, periodic Cosmos flush
+│   │   ├── BudgetMiddleware.cs      # HTTP middleware — enforces monthly request budget
+│   │   ├── BudgetServiceExtensions.cs  # DI wiring — budget guard registration
+│   │   └── BudgetSnapshot.cs        # Read-only consumption snapshot for admin panel
 │   ├── Cosmos/
 │   │   ├── CosmosGameRepository.cs  # Cosmos DB game persistence (v3 SDK)
 │   │   ├── CosmosSettings.cs        # Typed config for Cosmos connection
@@ -190,7 +197,7 @@ State is additionally persisted via `IGameRepository` — a swappable persistenc
 **`FileGameRepository`** — JSON file per game, stored under `/data/games/`. Per-game `SemaphoreSlim` locks serialise
 concurrent writes. Used in local development and as a zero-dependency fallback.
 
-**`CosmosGameRepository`** — Azure Cosmos DB (v3 SDK), SQL API, partition key `/id`. GameState is stored as a proper
+**`CosmosGameRepository`** — Azure Cosmos DB (v3 SDK), NoSQL API, partition key `/id`. GameState is stored as a proper
 nested JSON document via a custom `StjCosmosSerializer` wired into `CosmosClientOptions`, eliminating any Newtonsoft
 dependency. `CosmosClient` is registered as a singleton and shared between the game and user repositories.
 
@@ -200,14 +207,84 @@ dependency. `CosmosClient` is registered as a singleton and shared between the g
 The active implementation is selected via `PersistenceSettings:UseDatabase` in configuration — `false` uses
 `FileGameRepository`, `true` uses `CosmosGameRepository`. Switching backends requires no changes to engine or hub code.
 
+### Azure Cosmos DB Account — Configuration
+
+The production Cosmos DB account lives in the default Azure directory, separate from the Monopoly411 Entra External ID
+tenant. This is intentional — Cosmos and compute resources are provisioned under the default subscription, while
+Monopoly411 handles only CIAM auth (JWT issuance). The two tenants do not interact at the infrastructure level.
+
+**Account settings:**
+- API: Azure Cosmos DB for NoSQL
+- Capacity mode: Provisioned throughput
+- Free tier discount: active (first 1,000 RU/s and 25 GB free)
+- Availability zones: disabled
+- Geo-redundancy: disabled
+- Multi-region writes: disabled
+- Backup policy: Periodic, geo-redundant storage
+
+**Database: `MonopolyDb`**
+
+| Container | Partition key | Throughput                 |
+|-----------|---------------|----------------------------|
+| `games`   | `/id`         | 1000 RU/s (shared, manual) |
+| `users`   | `/id`         | shared                     |
+| `budget`  | `/id`         | shared                     |
+
+Throughput is set to 990 RU/s — just under the 1,000 RU/s free tier ceiling — shared across all three containers.
+Manual throughput is used deliberately over autoscale to prevent the account from scaling beyond the free tier.
+
+### Cosmos DB — Connection Mode
+
+`CosmosClient` is constructed with environment-aware options. The endpoint is inspected at startup to determine whether
+the target is the local emulator or the real Azure account:
+
+```csharp
+var isDevelopment = settings.Endpoint.Contains("localhost");
+
+return new CosmosClient(settings.Endpoint, settings.AuthKey, new CosmosClientOptions
+{
+    Serializer        = new StjCosmosSerializer(BuildJsonOptions()),
+    HttpClientFactory = isDevelopment
+        ? () => new HttpClient(new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback =
+                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        })
+        : null,
+    ConnectionMode = isDevelopment ? ConnectionMode.Gateway : ConnectionMode.Direct
+});
+```
+
+- **Local emulator** → `ConnectionMode.Gateway`, self-signed cert bypass via custom `HttpClientFactory`
+- **Azure** → `ConnectionMode.Direct`, no cert bypass, default `HttpClientFactory`
+
+No explicit environment check or build flag is needed — the endpoint value drives the behaviour automatically.
+
+### Cosmos DB — Capacity and Scale Estimates
+
+A complete game document is approximately 15–20 KB including the full board state, player records, event log, and
+pending trades. An upsert costs roughly 18 RUs at that size.
+
+| Metric | Value |
+|--------|-------|
+| RUs per game turn (3 saves × 18 RU) | ~54 RU |
+| Safe concurrent games at 990 RU/s | ~400–500 |
+| Monthly games budget (CPU-bound) | ~3,600 |
+| Monthly games budget (RU-bound) | ~950,000 |
+| Monthly games budget (HTTP requests) | ~8,200 |
+
+CPU on Container Apps free tier (162,000 vCPU-seconds/month at 90% cap) is the binding constraint, not Cosmos throughput.
+The `BudgetGuardService` enforces `MaxConcurrentGames = 10` which keeps the server well within all ceilings.
+
 ### Startup Ordering
 
 ```
+InitializeBudgetContainerAsync()    ← ensures budget container exists
 GameRoomManager.InitializeAsync()   ← awaited before app.RunAsync()
   ↓ loads all persisted games
   ↓ creates GameEngine for each InProgress game
 app.RunAsync()
-  ↓ hosted services start (GameCleanupService, TurnTimerService)
+  ↓ hosted services start (BudgetGuardService, GameCleanupService, TurnTimerService)
 ```
 
 `InitializeAsync` must complete before hosted services fire. If `GameCleanupService` runs before games are loaded
@@ -219,12 +296,104 @@ by explicit sequencing in `Program.cs`.
 ```
 appsettings.json              (placeholders only, committed)
 appsettings.Development.json  (non-secret dev defaults, committed)
-User Secrets                  (real credentials, never committed)
-Azure App Service Settings    (production override)
+User Secrets                  (real credentials, never committed — local dev only)
+Azure Container Apps env vars (production override — injected at deploy time)
 ```
 
-`.env` files were retired in favour of ASP.NET Core User Secrets, which store values outside the project directory and
-integrate natively with `IConfiguration`.
+`.env` files were retired in favour of ASP.NET Core User Secrets for local development. Production secrets are injected
+via Container Apps environment variables or Azure Key Vault references. The migration path to Managed Identity
+(eliminating `AuthKey` entirely) is planned for the container deployment phase — `CosmosSettings.AuthKey` being empty
+signals that `DefaultAzureCredential` should be used instead of key-based auth.
+
+---
+## Budget Guard
+
+### Decision
+
+Azure Container Apps free-tier resources (vCPU-seconds, HTTP requests) are finite monthly allotments. Without
+enforcement, a traffic spike or runaway loop could exhaust the quota and incur unexpected charges. The budget guard
+enforces hard limits in-process before any cost is incurred, with no dependency on external billing APIs.
+
+### Architecture
+
+All hot-path tracking is **lock-free** using `Interlocked` operations on backing fields. Cosmos persistence is
+serialized under a `SemaphoreSlim` on a background timer only — never on the request path. This means the guard
+adds zero meaningful latency to normal requests.
+
+```
+Request arrives
+  → BudgetMiddleware.InvokeAsync
+      → BudgetGuardService.TryConsumeRequest()
+          → Interlocked.Increment(ref _consumedHttpRequests)   ← lock-free
+          → compare against MaxHttpRequests
+          → return true (allow) or false (block with 503)
+
+Every 5 minutes (background):
+  → BudgetGuardService.FlushAsync()
+      → acquire _flushLock
+      → accrue elapsed CPU seconds
+      → sync _consumedHttpRequests into _budget document
+      → MaybeResetMonth() if calendar month rolled over
+      → UpsertItemAsync to Cosmos budget container
+      → release _flushLock
+```
+
+On container restart, `LoadFromCosmosAsync` reloads the last persisted `BudgetDocument` and seeds
+`_consumedHttpRequests` via `Interlocked.Exchange` — counters resume from the last flush point, not from zero.
+Up to 5 minutes of requests since the last flush may be under-counted on an unclean restart; this is acceptable
+given the 90% safety margin built into the caps.
+
+### BudgetDocument
+
+Single Cosmos document, `id = "server-budget"`, partition key `/id`. Contains both the configuration limits
+and the running consumption counters so they travel together and reset atomically on month rollover.
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `maxCpuSeconds` | 162,000 | 90% of 180,000 free-tier vCPU-seconds |
+| `maxHttpRequests` | 1,800,000 | 90% of 2,000,000 free-tier requests |
+| `maxConcurrentGames` | 10 | Hard cap on simultaneous active game sessions |
+| `maxConcurrentConnections` | 80 | Hard cap on simultaneous SignalR connections |
+| `consumedCpuSeconds` | — | Accumulated this window |
+| `consumedHttpRequests` | — | Accumulated this window |
+| `windowStart` | month start UTC | Drives monthly reset logic |
+| `lastSavedAt` | — | Timestamp of last successful Cosmos flush |
+
+Limits are stored in Cosmos rather than configuration so they can be adjusted at runtime without a redeploy.
+
+### Enforcement Points
+
+| Guard | Method | Called from |
+|-------|--------|-------------|
+| HTTP requests | `TryConsumeRequest()` | `BudgetMiddleware` — every incoming request |
+| SignalR connections | `TryAddConnection()` / `ReleaseConnection()` | `GameHub.OnConnectedAsync` / `OnDisconnectedAsync` |
+| Active games | `TryAddGame()` / `ReleaseGame()` | `GameRoomManager.CreateGame()` / `DeleteGame()` |
+
+### HTTP 503 Response
+
+When `TryConsumeRequest()` returns false, `BudgetMiddleware` short-circuits with:
+
+```json
+{
+  "error": "Monthly request budget exhausted. Service resumes next billing cycle.",
+  "resetAt": "2026-04-01T00:00:00Z"
+}
+```
+
+A `Retry-After` header is set to the seconds remaining until the next month window.
+
+### Registration Guard
+
+`AddBudgetGuard` and `InitializeBudgetContainerAsync` both check `PersistenceSettings:UseDatabase` before
+resolving `CosmosClient` from DI. When running with `FileGameRepository` (UseDatabase = false), the budget
+system is skipped entirely — no crash, no orphaned registrations.
+
+### Cosmos RU Cost
+
+The budget flush is a single small-document upsert every 5 minutes:
+- 12 writes/hour × 24 × 30 = 8,640 writes/month
+- ~10 RUs per upsert = ~86,400 RUs/month total
+- Less than 0.1% of the monthly RU budget
 
 ---
 
@@ -279,6 +448,13 @@ Microsoft Entra External ID is the correct product for customer-facing (CIAM) ap
 requires a paid licence and is for internal users. Azure AD B2C is no longer available for new tenants as of May 2025.
 App registrations must be created while the portal is confirmed inside the External ID tenant — registrations made in
 the Default Directory are invisible to the correct tenant.
+
+### Tenant Separation
+
+Cosmos DB and compute resources are provisioned under the **default Azure directory** (where the subscription lives).
+Entra External ID lives in the **Monopoly411 tenant**. These are separate concerns that do not interact at the
+infrastructure level — the server talks to Cosmos for data and to Entra for token validation independently.
+Managed Identity for Cosmos auth is assigned within the default directory only.
 
 ---
 
@@ -647,11 +823,18 @@ Handles all pre-game room lifecycle operations, decoupled from the hub transport
 
 Manages per-game countdown timers. Fires `TurnWarning` to the current player before auto-advancing the turn on expiry.
 
+### BudgetGuardService
+
+Background service tracking Azure Container Apps free-tier consumption. See [Budget Guard](#budget-guard) section for
+full architecture. Registered as both a singleton (for direct method calls from middleware and hubs) and a hosted
+service (for `ExecuteAsync` background flush loop).
+
 ### Registration (Program.cs)
 
 ```csharp
 builder.Services.AddGamePersistence(builder.Configuration);   // IGameRepository + CosmosClient
 builder.Services.AddGameAuth(builder.Configuration);          // JWT, Entra, IUserRepository
+builder.Services.AddBudgetGuard(builder.Configuration);       // BudgetGuardService (no-op if UseDatabase=false)
 builder.Services.AddGameServices();                           // GameRoomManager, GameCleanupService
 
 builder.Services.AddSingleton<InputValidator>();
@@ -661,13 +844,15 @@ builder.Services.AddSingleton<BotDecisionEngine>();
 builder.Services.AddSingleton<BotTurnOrchestrator>();
 builder.Services.AddHostedService<TurnTimerService>();
 
+app.UseMiddleware<BudgetMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapHub<GameHub>("/game-hub");
 app.MapHub<AdminHub>("/admin-hub");
 
-await app.InitializeGameManagerAsync();   // must precede RunAsync
+await app.InitializeBudgetContainerAsync();   // ensures budget container exists
+await app.InitializeGameManagerAsync();        // must precede RunAsync
 await app.RunAsync();
 ```
 
@@ -693,7 +878,7 @@ entries) · `CurrentTurnStartedAt`
 
 **`PlayerLobbyInfo`** — Lightweight player projection used in lobby broadcasts before game start
 
-**`ServerHealthStatsDto`** — Diagnostics payload served by `AdminHub`
+**`ServerHealthStatsDto`** — Diagnostics payload served by `AdminHub`, includes `BudgetSnapshot`
 
 **`CardDto`** — `Type` · `Text` · `Amount?`
 
@@ -722,26 +907,31 @@ hub re-adds connection to the group, updates `ConnectionId` on the player record
 
 ## Edge Cases
 
-| Scenario                        | Behaviour                                                    |
-|---------------------------------|--------------------------------------------------------------|
-| Player joins full game          | Error: "Game is full"                                        |
-| Start with fewer than 2 players | Error: "Need at least 2 players"                             |
-| Non-host calls `StartGame`      | Error: "Only host can start"                                 |
-| Host leaves lobby               | `player[0]` promoted, `HostChanged` broadcast                |
-| Last player leaves              | Room deleted immediately                                     |
-| Player disconnects mid-turn     | Marked disconnected, state broadcast to room                 |
-| Reconnect to active game        | Full `GameStateDto` sent to reconnecting connection          |
-| Buy already-owned property      | Engine rejects: "Already owned"                              |
-| Insufficient cash               | Engine rejects with reason, no state change                  |
-| Mortgage with houses present    | Engine rejects in `MortgageProperty()`                       |
-| Jail — roll doubles             | Engine releases immediately in `ReleaseFromJail()`           |
-| Trade for unowned property      | `TradeService.ValidateTradeAssets()` rejects                 |
-| "Go back 3" lands on Chance     | Chain draw: next card executed immediately                   |
-| Player bankrupted mid-trade     | Trade cancelled, properties returned to bank                 |
-| Concurrent buy attempts         | `_lock` ensures first writer wins; second receives rejection |
-| Unauthenticated hub connection  | ASP.NET Core rejects at middleware — hub never invoked       |
-| Non-admin calls admin method    | `[Authorize(Roles="Admin")]` rejects at hub class level      |
-| MutateGame returns false        | Game vanished between pre-check and mutation — logged as warning |
+| Scenario                        | Behaviour                                                                |
+|---------------------------------|--------------------------------------------------------------------------|
+| Player joins full game          | Error: "Game is full"                                                    |
+| Start with fewer than 2 players | Error: "Need at least 2 players"                                         |
+| Non-host calls `StartGame`      | Error: "Only host can start"                                             |
+| Host leaves lobby               | `player[0]` promoted, `HostChanged` broadcast                            |
+| Last player leaves              | Room deleted immediately                                                 |
+| Player disconnects mid-turn     | Marked disconnected, state broadcast to room                             |
+| Reconnect to active game        | Full `GameStateDto` sent to reconnecting connection                      |
+| Buy already-owned property      | Engine rejects: "Already owned"                                          |
+| Insufficient cash               | Engine rejects with reason, no state change                              |
+| Mortgage with houses present    | Engine rejects in `MortgageProperty()`                                   |
+| Jail — roll doubles             | Engine releases immediately in `ReleaseFromJail()`                       |
+| Trade for unowned property      | `TradeService.ValidateTradeAssets()` rejects                             |
+| "Go back 3" lands on Chance     | Chain draw: next card executed immediately                               |
+| Player bankrupted mid-trade     | Trade cancelled, properties returned to bank                             |
+| Concurrent buy attempts         | `_lock` ensures first writer wins; second receives rejection             |
+| Unauthenticated hub connection  | ASP.NET Core rejects at middleware — hub never invoked                   |
+| Non-admin calls admin method    | `[Authorize(Roles="Admin")]` rejects at hub class level                  |
+| MutateGame returns false        | Game vanished between pre-check and mutation — logged as warning         |
+| HTTP budget exhausted           | `BudgetMiddleware` returns 503 with `Retry-After` header                 |
+| Connection limit reached        | `TryAddConnection()` returns false, SignalR connection refused           |
+| Game limit reached              | `TryAddGame()` returns false, `CreateGame` rejects                       |
+| Container restart               | `BudgetGuardService` reloads consumption counters from Cosmos on startup |
+| UseDatabase = false             | `AddBudgetGuard` and `InitializeBudgetContainerAsync` no-op cleanly      |
 
 ---
 
@@ -752,6 +942,13 @@ hub re-adds connection to the group, updates `ConnectionId` on the player record
 **No Newtonsoft.Json** — The entire stack uses System.Text.Json including Cosmos DB via `StjCosmosSerializer`.
 
 **No per-game locks** — A single manager-level lock is simpler to reason about and sufficient at the player cap.
+
+**No budget persistence to local file** — Budget counters are stored in Cosmos. Using the file system would lose
+counters on container restart. The periodic flush pattern (5-minute interval, reload on startup) is the correct
+enterprise pattern: in-memory hot path, durable cold path, acceptable ~5-minute under-count window on unclean restart.
+
+**No autoscale throughput on Cosmos** — Manual provisioning at 990 RU/s keeps the account within the free tier
+ceiling. Autoscale could silently breach the 1,000 RU/s threshold and incur charges.
 
 ---
 
@@ -766,6 +963,7 @@ hub re-adds connection to the group, updates `ConnectionId` on the player record
 | **DTOs**        | Typed serialisation boundary                                            |
 | **Persistence** | `IGameRepository` / `IUserRepository` — swappable, isolated from engine |
 | **Auth**        | Entra External ID JWT — identity from claims, roles from Cosmos         |
+| **Budget**      | In-memory counters, lock-free hot path, periodic Cosmos flush           |
 | **React**       | Presentational — server is the single source of truth                   |
 
 - Hub never calls `GameEngine` directly — always via `MutateGame`, `ExecuteWithEngine`, or `InitializeEngine`
@@ -773,7 +971,10 @@ hub re-adds connection to the group, updates `ConnectionId` on the player record
 - Broadcasts and async I/O happen after the lock is released, never inside it
 - `DeleteGame` is never called from inside a `MutateGame` lambda — use a signal flag instead
 - `InitializeAsync` is awaited before `RunAsync` — hosted services never run against an empty game dictionary
+- `BudgetGuardService` is only registered when `PersistenceSettings:UseDatabase` is true — no orphaned DI registrations
+- `BudgetMiddleware` is registered before `UseRouting` so it covers all endpoints including hubs
 - React components always return their unsubscribe functions from `useEffect`
 - Client never mutates game state locally — waits for `GameStateUpdated`
 - Player identity is always resolved from B2C objectId claims, never from `ConnectionId`
 - Admin access is a Cosmos-persisted role claim, never a shared secret in config or a method parameter
+- Cosmos throughput is provisioned manually — autoscale is never used, free tier ceiling must not be breached

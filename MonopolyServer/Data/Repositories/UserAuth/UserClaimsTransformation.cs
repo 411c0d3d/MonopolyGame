@@ -89,8 +89,8 @@ public sealed class UserClaimsTransformation : IClaimsTransformation
                 };
 
                 await _userRepository.UpsertAsync(user);
-                _logger.LogInformation("New user registered: {DisplayName} objectId={ObjectId} email={Email} isAdmin={IsAdmin}",
-                    displayName, objectId, resolvedEmail, user.IsAdmin);
+                _logger.LogInformation("New user registered: {DisplayName} objectId={ObjectId} isAdmin={IsAdmin}",
+                    displayName, objectId, user.IsAdmin);
             }
             else
             {
