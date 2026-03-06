@@ -21,6 +21,29 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
     const [drawnCard, setDrawnCard] = useState(null); // { type, text, amount? }
     const cardTimerRef = React.useRef(null);
 
+    // Trade queue: one pending offer per sender — new offer from the same player replaces the old one.
+    // Keyed by fromPlayerId so lookup and replace are O(1).
+    const [tradeQueue, setTradeQueue] = useState({});
+
+    // Muted player IDs — popups are suppressed; offer still lands in the queue.
+    // A ref mirrors state so the hub handler always reads the current value without stale closure.
+    const [mutedPlayers, setMutedPlayers] = useState(() => new Set());
+    const mutedRef = useRef(mutedPlayers);
+
+    /** Toggles mute for a player and keeps the ref in sync. */
+    const toggleMute = useCallback((playerId) => {
+        setMutedPlayers(prev => {
+            const next = new Set(prev);
+            if (next.has(playerId)) {
+                next.delete(playerId);
+            } else {
+                next.add(playerId);
+            }
+            mutedRef.current = next;
+            return next;
+        });
+    }, []);
+
     const showCard = useCallback((card) => {
         clearTimeout(cardTimerRef.current);
         setDrawnCard(card);
@@ -31,6 +54,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
         clearTimeout(cardTimerRef.current);
         setDrawnCard(null);
     }, []);
+
     const [liquidateOpen, setLiquidateOpen] = useState(false);
     const [logExpanded, setLogExpanded] = useState(false);
     const [buildPending, setBuildPending] = useState(null); // { prop, space, buildType }
@@ -56,7 +80,14 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
     /** Attaches SignalR listeners for real-time game updates. */
     useEffect(() => {
         const unsubscribers = [
-            gameHub.on('TradeProposed', offer => setIncomingTrade(offer)),
+            gameHub.on('TradeProposed', offer => {
+                // Always upsert into queue — latest offer from this sender replaces the prior one.
+                setTradeQueue(prev => ({...prev, [offer.fromPlayerId]: offer}));
+                // Show the popup only if the sender is not muted.
+                if (!mutedRef.current.has(offer.fromPlayerId)) {
+                    setIncomingTrade(offer);
+                }
+            }),
             gameHub.on('GamePaused', () => setPaused(true)),
             gameHub.on('GameResumed', () => setPaused(false)),
             gameHub.on('CardDrawn', card => showCard(card)),
@@ -86,6 +117,23 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
         return () => unsubscribers.forEach(fn => fn());
     }, [gameId, playerName]);
 
+    // Clear queued offers from players who have gone bankrupt mid-game.
+    useEffect(() => {
+        const bankruptIds = new Set(players.filter(p => p.isBankrupt).map(p => p.id));
+        if (bankruptIds.size === 0) {
+            return;
+        }
+        setTradeQueue(prev => {
+            const hasStale = Object.keys(prev).some(id => bankruptIds.has(id));
+            if (!hasStale) {
+                return prev;
+            }
+            const next = {...prev};
+            bankruptIds.forEach(id => delete next[id]);
+            return next;
+        });
+    }, [players]);
+
     const hubCall = (method, ...args) => {
         gameHub.call(method, ...args).catch(e => toast(e.message || 'Action failed', 'error'));
     };
@@ -95,6 +143,31 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
         triggerRoll();
         hubCall('RollDice', gameId);
     };
+
+    /** Removes offer from queue and clears the modal. */
+    const handleTradeDone = useCallback((fromPlayerId) => {
+        if (fromPlayerId) {
+            setTradeQueue(prev => {
+                const next = {...prev};
+                delete next[fromPlayerId];
+                return next;
+            });
+        }
+        setIncomingTrade(null);
+    }, []);
+
+    /**
+     * Handles clicking a player row in the sidebar.
+     * If that player has a queued (muted) offer, opens it; otherwise opens the propose modal.
+     */
+    const handleTradeRowClick = useCallback((player) => {
+        const queued = tradeQueue[player.id];
+        if (queued) {
+            setIncomingTrade(queued);
+        } else {
+            setTradingWith(player);
+        }
+    }, [tradeQueue]);
 
     /** Groups myProperties by color for the right panel. */
     const myPropertyGroups = groupPropsByColor(myProperties);
@@ -173,26 +246,116 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                     <div className="slabel">Trade With</div>
                     {players.filter(p => p.name !== playerName && !p.isBankrupt).map(player => {
                         const idx = players.indexOf(player);
+                        const color = COLORS[idx % COLORS.length];
+                        const isMuted = mutedPlayers.has(player.id);
+                        const hasQueued = !!tradeQueue[player.id];
                         return (
-                            <button key={player.id} className="btn btn-ghost btn-sm btn-full"
-                                    style={{justifyContent: 'flex-start', gap: 7, marginBottom: 5}}
-                                    onClick={() => setTradingWith(player)}>
-                                <div style={{
-                                    width: 17,
-                                    height: 17,
-                                    borderRadius: '50%',
-                                    background: COLORS[idx % COLORS.length],
-                                    color: '#fff',
-                                    fontSize: 8,
+                            <div
+                                key={player.id}
+                                style={{
                                     display: 'flex',
                                     alignItems: 'center',
-                                    justifyContent: 'center',
-                                    fontWeight: 700
-                                }}>
-                                    {player.name[0]}
-                                </div>
-                                {player.name}
-                            </button>
+                                    gap: 6,
+                                    marginBottom: 5,
+                                    padding: '4px 6px',
+                                    borderRadius: 6,
+                                    background: 'rgba(255,255,255,0.04)',
+                                    border: '1px solid var(--border)',
+                                }}
+                            >
+                                {/* Left: avatar + name — opens trade or queued offer */}
+                                <button
+                                    className="btn btn-ghost btn-sm"
+                                    style={{
+                                        flex: 1,
+                                        justifyContent: 'flex-start',
+                                        gap: 7,
+                                        padding: 0,
+                                        border: 'none',
+                                        background: 'none',
+                                        minWidth: 0,
+                                    }}
+                                    onClick={() => handleTradeRowClick(player)}
+                                >
+                                    <div style={{
+                                        position: 'relative',
+                                        flexShrink: 0,
+                                    }}>
+                                        <div style={{
+                                            width: 22,
+                                            height: 22,
+                                            borderRadius: '50%',
+                                            background: color,
+                                            color: '#fff',
+                                            fontSize: 9,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            fontWeight: 700,
+                                        }}>
+                                            {player.name[0]}
+                                        </div>
+                                        {/* Pending offer badge */}
+                                        {hasQueued && (
+                                            <div style={{
+                                                position: 'absolute',
+                                                top: -3,
+                                                right: -3,
+                                                width: 8,
+                                                height: 8,
+                                                borderRadius: '50%',
+                                                background: 'var(--gold)',
+                                                border: '1px solid var(--bg)',
+                                            }}/>
+                                        )}
+                                    </div>
+                                    <span style={{
+                                        fontSize: 11,
+                                        fontWeight: 500,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                    }}>
+                                        {player.name}
+                                    </span>
+                                </button>
+
+                                {/* Right: bell mute toggle */}
+                                <button
+                                    className="btn btn-ghost btn-sm"
+                                    title={
+                                        isMuted && hasQueued ? 'Offer waiting — click to unmute'
+                                            : isMuted ? 'Unmute offers from this player'
+                                                : 'Mute offers from this player'
+                                    }
+                                    style={{
+                                        padding: '3px 5px',
+                                        flexShrink: 0,
+                                        color: isMuted && hasQueued ? 'var(--gold)'
+                                            : isMuted ? 'var(--red)'
+                                                : 'rgba(255,255,255,0.35)',
+                                        border: 'none',
+                                        background: 'none',
+                                        lineHeight: 1,
+                                        position: 'relative',
+                                    }}
+                                    onClick={() => toggleMute(player.id)}
+                                >
+                                    <BellIcon muted={isMuted}/>
+                                    {isMuted && hasQueued && (
+                                        <div style={{
+                                            position: 'absolute',
+                                            top: 1,
+                                            right: 2,
+                                            width: 6,
+                                            height: 6,
+                                            borderRadius: '50%',
+                                            background: 'var(--gold)',
+                                            border: '1px solid var(--bg)',
+                                        }}/>
+                                    )}
+                                </button>
+                            </div>
                         );
                     })}
                     <div className="div"/>
@@ -435,8 +598,6 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                         </button>
                     </div>
                 </div>
-
-
             </div>
 
             {liquidateOpen && (
@@ -452,8 +613,13 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
                 <CardDrawnModal card={drawnCard} onDismiss={dismissCard}/>
             )}
             {incomingTrade && (
-                <IncomingTradeModal offer={incomingTrade} me={me} gameId={gameId} board={boardSpaces}
-                                    onDone={() => setIncomingTrade(null)}/>
+                <IncomingTradeModal
+                    offer={incomingTrade}
+                    me={me}
+                    gameId={gameId}
+                    board={boardSpaces}
+                    onDone={() => handleTradeDone(incomingTrade?.fromPlayerId)}
+                />
             )}
             {jailModalOpen && me && (
                 <JailModal
@@ -510,4 +676,21 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
             )}
         </div>
     );
+
+    /** Bell icon — filled when muted, outline when active. */
+    function BellIcon({muted}) {
+        return muted ? (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                <path
+                    d="M5.705 3.71L4.29 2.295 2 4.585l1.418 1.418A9.953 9.953 0 0 0 2 12v1H1v2h22v-2h-1v-1c0-2.29-.772-4.403-2.062-6.1L22 3.705 20.586 2.29 5.705 3.71zM12 22c1.104 0 2-.896 2-2h-4c0 1.104.896 2 2 2zm6-9v1H6v-1c0-3.314 2.686-6 6-6s6 2.686 6 6z"/>
+                <line x1="2" y1="2" x2="22" y2="22" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+        ) : (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                 strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+        );
+    }
 }
