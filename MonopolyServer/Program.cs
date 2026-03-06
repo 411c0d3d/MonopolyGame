@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using MonopolyServer.Bot;
 using MonopolyServer.Data.Repositories.GameStorage;
 using MonopolyServer.Data.Repositories.UserAuth;
@@ -19,12 +20,23 @@ public class Program
         var builder = WebApplication.CreateBuilder(args);
 
         // Add SignalR and CORS for the external client
-        builder.Services.AddSignalR();
+        builder.Services.AddSignalR()
+            .AddJsonProtocol(options =>
+            {
+                options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+            });
+
+        builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        });
         builder.Services.AddCors(options =>
         {
             options.AddPolicy("AllowAll", policy =>
             {
-                policy.WithOrigins("http://localhost:5300")
+                policy.WithOrigins(
+                        "http://localhost:5500", // For Server api endpoints
+                        "http://localhost:5400") // For Client CORS
                     .AllowAnyMethod()
                     .AllowAnyHeader()
                     .AllowCredentials();
@@ -35,6 +47,8 @@ public class Program
         builder.Services.AddGamePersistence(builder.Configuration);
 
         // Auth — Entra External ID JWT validation, role-based authorization, claims enrichment
+        // NOTE: AddGameAuth must include JwtBearerEvents.OnMessageReceived to forward
+        // ?access_token= into the bearer token — required for SignalR WebSocket connections.
         builder.Services.AddGameAuth(builder.Configuration);
 
         // Budget guard — free-tier consumption tracking and enforcement
@@ -87,6 +101,19 @@ public class Program
             var gameId = rm.CreateGame();
             return Results.Ok(new { gameId });
         });
+
+        // Returns the authenticated user's server-side role — Admin is injected by
+        // UserClaimsTransformation and is never present in the Entra-issued JWT itself.
+        app.MapGet("/api/me", (HttpContext ctx) =>
+        {
+            var user = ctx.User;
+            if (user?.Identity?.IsAuthenticated != true)
+            {
+                return Results.Unauthorized();
+            }
+
+            return Results.Ok(new { isAdmin = user.IsInRole(UserClaimsTransformation.AdminRole) });
+        }).RequireAuthorization();
 
         // Must complete before RunAsync — guarantees GameRoomManager is fully loaded
         // before GameCleanupService.ExecuteAsync fires on startup.

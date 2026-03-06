@@ -9,7 +9,7 @@
  * Main in-game page with board, player panel, action controls, and event log.
  * @param {{ gameId: string, playerName: string, gameState: any, onLeave: function, isAdmin: boolean, onAdmin: function }} props
  */
-function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adminKey}) {
+function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin}) {
     const {toast} = useContext(Ctx);
     const [dice, rolling, triggerRoll, settleDice] = useDiceRoll();
     const [incomingTrade, setIncomingTrade] = useState(null);
@@ -101,7 +101,7 @@ function GamePage({gameId, playerName, gameState, onLeave, isAdmin, onAdmin, adm
 
     return (
         <div className="page-enter">
-            <Header page="game" me={playerName} isAdmin={isAdmin} onAdmin={onAdmin} onLeave={onLeave}/>
+            <Header page="game" me={playerName} isAdmin={isAdmin} onAdmin={onAdmin} onLeave={onLeave} onBack={onLeave}/>
             {paused && <div className="paused-banner">⏸ Game paused by admin</div>}
 
             {winner && (

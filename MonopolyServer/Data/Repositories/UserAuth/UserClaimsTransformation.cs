@@ -8,7 +8,8 @@ namespace MonopolyServer.Data.Repositories.UserAuth;
 /// <summary>
 /// Enriches the authenticated ClaimsPrincipal with roles stored in Cosmos.
 /// Called by ASP.NET Core on every authenticated request.
-/// Creates the UserDocument on first login and promotes to Admin if email matches AdminEmail config.
+/// Creates the UserDocument on first login. Admin is identified by objectId or email from config —
+/// when objectId matches, the known AdminEmail from config is stored directly, bypassing CIAM claim noise.
 /// </summary>
 public sealed class UserClaimsTransformation : IClaimsTransformation
 {
@@ -34,76 +35,127 @@ public sealed class UserClaimsTransformation : IClaimsTransformation
 
     /// <summary>
     /// Looks up or creates the UserDocument for the authenticated user.
-    /// Assigns Admin role if the user's email matches AdminEmail in config.
-    /// Returns an enriched ClaimsPrincipal with role claims added.
+    /// Admin is matched by objectId first, email second.
+    /// When objectId matches AdminObjectId, the real AdminEmail from config overwrites whatever CIAM sent.
     /// </summary>
     public async Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)
     {
-        var objectId = principal.FindFirstValue(ObjectIdClaimType);
+        var objectId = principal.FindFirstValue(ObjectIdClaimType)
+                       ?? principal.FindFirstValue("oid")
+                       ?? principal.FindFirstValue("sub");
+
         if (string.IsNullOrEmpty(objectId))
         {
+            _logger.LogWarning("UserClaimsTransformation: no objectId claim found — skipping enrichment");
             return principal;
         }
 
-        // Skip if Admin role already added this request cycle
-        if (principal.IsInRole(AdminRole))
-        {
-            return principal;
-        }
-
-        var email = (principal.FindFirstValue("email")
-                     ?? principal.FindFirstValue(ClaimTypes.Email)
-                     ?? string.Empty).ToLowerInvariant();
+        // Raw token email — may be a CIAM UPN placeholder, not the real address.
+        var tokenEmail = (principal.FindFirstValue("email")
+                          ?? principal.FindFirstValue("preferred_username")
+                          ?? principal.FindFirstValue(ClaimTypes.Email)
+                          ?? principal.FindFirstValue(ClaimTypes.Upn)
+                          ?? string.Empty).ToLowerInvariant();
 
         var displayName = principal.FindFirstValue("name")
                           ?? principal.FindFirstValue(ClaimTypes.Name)
                           ?? "Player";
 
-        var user = await _userRepository.GetAsync(objectId);
+        // When objectId matches AdminObjectId we know exactly who this is — use the configured
+        // real email instead of whatever CIAM put in the token.
+        var isAdminByObjectId = IsAdminObjectId(objectId);
+        var resolvedEmail = isAdminByObjectId && !string.IsNullOrEmpty(_settings.AdminEmail)
+            ? _settings.AdminEmail.Trim().ToLowerInvariant()
+            : tokenEmail;
 
-        if (user == null)
-        {
-            user = new UserDocument
-            {
-                Id = objectId,
-                Email = email,
-                DisplayName = displayName,
-                IsAdmin = IsAdminEmail(email),
-                CreatedAt = DateTime.UtcNow,
-                LastLoginAt = DateTime.UtcNow
-            };
+        _logger.LogInformation(
+            "UserClaimsTransformation: objectId={ObjectId} isAdminByObjectId={IsAdminById}",
+            objectId, isAdminByObjectId);
 
-            await _userRepository.UpsertAsync(user);
-            _logger.LogInformation("New user registered: {DisplayName} ({Email}) isAdmin={IsAdmin}",
-                displayName, email, user.IsAdmin);
-        }
-        else
+        try
         {
-            // Promote to admin if email now matches config (e.g. config was updated)
-            if (!user.IsAdmin && IsAdminEmail(email))
+            var user = await _userRepository.GetAsync(objectId);
+
+            if (user == null)
             {
-                user.IsAdmin = true;
-                _logger.LogInformation("User {Email} promoted to Admin", email);
+                user = new UserDocument
+                {
+                    Id = objectId,
+                    Email = resolvedEmail,
+                    DisplayName = displayName,
+                    IsAdmin = isAdminByObjectId || IsAdminEmail(resolvedEmail),
+                    CreatedAt = DateTime.UtcNow,
+                    LastLoginAt = DateTime.UtcNow
+                };
+
+                await _userRepository.UpsertAsync(user);
+                _logger.LogInformation("New user registered: {DisplayName} objectId={ObjectId} email={Email} isAdmin={IsAdmin}",
+                    displayName, objectId, resolvedEmail, user.IsAdmin);
+            }
+            else
+            {
+                // Promote if not yet admin but now matches config
+                if (!user.IsAdmin && (isAdminByObjectId || IsAdminEmail(resolvedEmail)))
+                {
+                    user.IsAdmin = true;
+                    _logger.LogInformation("User {ObjectId} promoted to Admin", objectId);
+                }
+
+                // Fix stored email if it is still a CIAM UPN placeholder
+                if (IsUpnPlaceholder(user.Email) && !string.IsNullOrEmpty(resolvedEmail) &&
+                    !IsUpnPlaceholder(resolvedEmail))
+                {
+                    user.Email = resolvedEmail;
+                }
+
+                user.LastLoginAt = DateTime.UtcNow;
+                user.DisplayName = displayName;
+                await _userRepository.UpsertAsync(user);
             }
 
-            user.LastLoginAt = DateTime.UtcNow;
-            user.DisplayName = displayName;
-            await _userRepository.UpsertAsync(user);
-        }
+            if (!user.IsAdmin)
+            {
+                return principal;
+            }
 
-        if (!user.IsAdmin)
+            // Avoid adding a duplicate role claim on subsequent requests in the same pipeline cycle
+            if (principal.IsInRole(AdminRole))
+            {
+                return principal;
+            }
+
+            var identity = new ClaimsIdentity(principal.Identity);
+            identity.AddClaim(new Claim(ClaimTypes.Role, AdminRole));
+            return new ClaimsPrincipal(identity);
+        }
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "UserClaimsTransformation failed for objectId={ObjectId}", objectId);
             return principal;
         }
-
-        // Clone the identity and add the Admin role claim
-        var identity = new ClaimsIdentity(principal.Identity);
-        identity.AddClaim(new Claim(ClaimTypes.Role, AdminRole));
-
-        return new ClaimsPrincipal(identity);
     }
 
+    /// <summary>
+    /// Matches the objectId against AdminObjectId config.
+    /// </summary>
+    private bool IsAdminObjectId(string objectId) =>
+        !string.IsNullOrEmpty(_settings.AdminObjectId) &&
+        string.Equals(objectId, _settings.AdminObjectId.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Matches the resolved email against AdminEmail config.
+    /// </summary>
     private bool IsAdminEmail(string email) =>
         !string.IsNullOrEmpty(_settings.AdminEmail) &&
-        string.Equals(email, _settings.AdminEmail.ToLowerInvariant(), StringComparison.Ordinal);
+        !string.IsNullOrEmpty(email) &&
+        string.Equals(email, _settings.AdminEmail.Trim().ToLowerInvariant(), StringComparison.Ordinal);
+
+    /// <summary>
+    /// Detects CIAM-generated UPN placeholders: {guid}@{tenant}.onmicrosoft.com
+    /// </summary>
+    private static bool IsUpnPlaceholder(string email) =>
+        !string.IsNullOrEmpty(email) &&
+        email.Contains('@') &&
+        email.Split('@')[0].Length == 36 &&
+        email.EndsWith(".onmicrosoft.com", StringComparison.OrdinalIgnoreCase);
 }

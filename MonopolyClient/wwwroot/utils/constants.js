@@ -1,7 +1,7 @@
 /* globals React */
 // utils/constants.js — loaded first; defines all shared app globals.
 
-const SERVER_URL = 'http://localhost:5299';
+const SERVER_URL = 'http://localhost:5500';
 
 // ---------------------------------------------------------------------------
 // Auth — Microsoft Entra External ID (CIAM)
@@ -13,6 +13,7 @@ window.MSAL_CLIENT_ID = '962f7297-974f-4752-bda4-7b1947a75ce1';
 
 /** CIAM authority URL — https://{tenant}.ciamlogin.com/{tenantId}/v2.0 */
 window.MSAL_AUTHORITY = 'https://12384f87-3250-4fe6-b8c4-a2b5a6692d7e.ciamlogin.com/12384f87-3250-4fe6-b8c4-a2b5a6692d7e/v2.0';
+
 /**
  * OAuth scope requested for the access token sent to the SignalR hub.
  * Must match the scope exposed on the app registration (Expose an API → Add a scope).
@@ -87,18 +88,29 @@ window.SPACES = [
     {id: 39, name: 'Boardwalk', type: 'Street', color: 'DarkBlue'},
 ];
 
+// ---------------------------------------------------------------------------
+// React hooks — exposed as globals so every component file can use them
+// without imports (Babel UMD build, no module system).
+// ---------------------------------------------------------------------------
+
 const {
     useState,
     useEffect,
     useCallback,
     useContext,
+    useRef,
+    useReducer,
+    useMemo,
     createContext,
 } = React;
 
-window.useState    = useState;
-window.useEffect   = useEffect;
+window.useState = useState;
+window.useEffect = useEffect;
 window.useCallback = useCallback;
-window.useContext  = useContext;
+window.useContext = useContext;
+window.useRef = useRef;
+window.useReducer = useReducer;
+window.useMemo = useMemo;
 window.createContext = createContext;
 
 /** Shared React context providing the toast() function to all components. */
