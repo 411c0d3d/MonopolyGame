@@ -29,13 +29,31 @@ public static class AuthServiceExtensions
             .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddMicrosoftIdentityWebApi(configuration.GetSection(AzureAdSettings.SectionName));
 
-        // SignalR passes the JWT as ?access_token= in the query string since
-        // browsers cannot set Authorization headers on WebSocket connections.
-        services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
+        // CIAM issues tokens with aud = ClientId (bare), not api://ClientId.
+        // Accept both so the validator doesn't reject the token.
+        var clientId = configuration[$"{AzureAdSettings.SectionName}:ClientId"] ?? string.Empty;
+        services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
         {
+            options.TokenValidationParameters.ValidAudiences =
+            [
+                clientId,
+                $"api://{clientId}",
+            ];
+
+            // SignalR passes the JWT as ?access_token= in the query string since
+            // browsers cannot set Authorization headers on WebSocket connections.
+            var existing = options.Events;
+
             options.Events = new JwtBearerEvents
             {
-                OnMessageReceived = ctx =>
+                OnAuthenticationFailed = ctx =>
+                {
+                    var logger = ctx.HttpContext.RequestServices
+                        .GetRequiredService<ILogger<JwtBearerEvents>>();
+                    logger.LogError("JWT auth failed: {Error}", ctx.Exception?.Message);
+                    return Task.CompletedTask;
+                },
+                OnMessageReceived = async ctx =>
                 {
                     var token = ctx.Request.Query["access_token"];
                     var path = ctx.HttpContext.Request.Path;
@@ -47,7 +65,10 @@ public static class AuthServiceExtensions
                         ctx.Token = token;
                     }
 
-                    return Task.CompletedTask;
+                    if (existing?.OnMessageReceived != null)
+                    {
+                        await existing.OnMessageReceived(ctx);
+                    }
                 }
             };
         });

@@ -106,8 +106,9 @@ class AuthService {
     }
 
     /**
-     * Decodes the JWT access token payload and checks the roles claim.
-     * The Admin role is added by UserClaimsTransformation on the server.
+     * Checks admin status by decoding the JWT roles claim.
+     * Entra now bakes "roles": ["Admin"] into the token directly once the app role is assigned.
+     * Falls back to /api/me if the token has no roles claim (e.g. first login before role propagates).
      */
     async isAdmin() {
         const token = await this.getToken();
@@ -116,10 +117,22 @@ class AuthService {
         }
         try {
             const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-            const roles = payload.roles
-                ?? payload['http://schemas.microsoft.com/ws/2008/06/identity/claims/role']
-                ?? [];
-            return Array.isArray(roles) ? roles.includes('Admin') : roles === 'Admin';
+            const roles = payload.roles ?? [];
+            if (Array.isArray(roles) ? roles.includes('Admin') : roles === 'Admin') {
+                return true;
+            }
+        } catch {
+            // ignore decode errors, fall through to server check
+        }
+        try {
+            const res = await fetch(`${SERVER_URL}/api/me`, {
+                headers: {Authorization: `Bearer ${token}`},
+            });
+            if (!res.ok) {
+                return false;
+            }
+            const data = await res.json();
+            return data.isAdmin === true;
         } catch {
             return false;
         }

@@ -12,10 +12,10 @@ namespace MonopolyServer.Hubs;
 
 /// <summary>
 /// Admin hub for server management and game control operations.
-/// Requires the Admin role — enforced at the hub level via [Authorize].
-/// All game state mutations go through GameRoomManager.MutateGame to run under the global lock.
+/// Authentication is required at the hub level so TransformAsync runs and enriches the principal.
+/// The Admin role is enforced per-method so the connection is established before the role check fires.
 /// </summary>
-[Authorize(Roles = UserClaimsTransformation.AdminRole)]
+[Authorize]
 public class AdminHub : Hub
 {
     private readonly GameRoomManager _roomManager;
@@ -41,6 +41,7 @@ public class AdminHub : Hub
     /// <summary>
     /// Force ends a game immediately. Marks it as finished without determining a winner.
     /// </summary>
+    [Authorize(Roles = UserClaimsTransformation.AdminRole)]
     public async Task ForceEndGame(string gameId)
     {
         if (_roomManager.GetGame(gameId) == null)
@@ -72,6 +73,7 @@ public class AdminHub : Hub
     /// <summary>
     /// Kicks a player from a game. Removes them if waiting, marks bankrupt if in progress.
     /// </summary>
+    [Authorize(Roles = UserClaimsTransformation.AdminRole)]
     public async Task KickPlayer(string gameId, string playerId)
     {
         if (_roomManager.GetGame(gameId) == null)
@@ -143,6 +145,7 @@ public class AdminHub : Hub
     /// <summary>
     /// Pauses a game in progress. Prevents all actions until resumed.
     /// </summary>
+    [Authorize(Roles = UserClaimsTransformation.AdminRole)]
     public async Task PauseGame(string gameId)
     {
         if (_roomManager.GetGame(gameId) == null)
@@ -191,6 +194,7 @@ public class AdminHub : Hub
     /// <summary>
     /// Resumes a paused game.
     /// </summary>
+    [Authorize(Roles = UserClaimsTransformation.AdminRole)]
     public async Task ResumeGame(string gameId)
     {
         if (_roomManager.GetGame(gameId) == null)
@@ -239,6 +243,7 @@ public class AdminHub : Hub
     /// <summary>
     /// Returns detailed game state for debugging purposes.
     /// </summary>
+    [Authorize(Roles = UserClaimsTransformation.AdminRole)]
     public async Task GetGameDetails(string gameId)
     {
         var game = _roomManager.GetGame(gameId);
@@ -286,6 +291,7 @@ public class AdminHub : Hub
     /// Adds one or more bot players to a waiting or in-progress game.
     /// Bots are named "Bot N", continuing from the highest existing bot number.
     /// </summary>
+    [Authorize(Roles = UserClaimsTransformation.AdminRole)]
     public async Task AddBotToGame(string gameId, int count = 1)
     {
         if (count < 1 || count > GameConstants.MaxPlayers)

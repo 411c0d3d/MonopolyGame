@@ -4,9 +4,9 @@
 
 /**
  * Admin control panel for monitoring and managing active games.
- * @param {{ adminKey: string, onBack: function }} props
+ * @param {{ onBack: function }} props
  */
-function AdminPage({adminKey, onBack}) {
+function AdminPage({onBack}) {
     const {toast} = useContext(Ctx);
     const [games, setGames] = useState([]);
     const [selectedId, setSelectedId] = useState(null);
@@ -19,23 +19,41 @@ function AdminPage({adminKey, onBack}) {
 
     // Mirror of home_page: silent=true skips the spinner for background polls
     const fetchGames = useCallback((silent = false) => {
-        if (!silent) { setInitialLoading(true); }
+        if (!silent) {
+            setInitialLoading(true);
+        }
         fetch(`${SERVER_URL}/api/games`)
             .then(r => r.json())
-            .then(data => { setGames(data); setInitialLoading(false); })
-            .catch(() => { setInitialLoading(false); });
+            .then(data => {
+                setGames(data);
+                setInitialLoading(false);
+            })
+            .catch(() => {
+                setInitialLoading(false);
+            });
     }, []);
 
     const refreshDetail = useCallback((silent = false) => {
         const gid = selectedIdRef.current;
-        if (!gid) { return; }
+        if (!gid) {
+            return;
+        }
         const conn = adminConnRef.current;
-        if (!conn || conn.state !== signalR.HubConnectionState.Connected) { return; }
-        if (!silent) { setDetailLoading(true); }
-        conn.invoke('GetGameDetails', gid, adminKey)
-            .catch(() => {})
-            .finally(() => { if (!silent) { setDetailLoading(false); } });
-    }, [adminKey]);
+        if (!conn || conn.state !== signalR.HubConnectionState.Connected) {
+            return;
+        }
+        if (!silent) {
+            setDetailLoading(true);
+        }
+        conn.invoke('GetGameDetails', gid)
+            .catch(() => {
+            })
+            .finally(() => {
+                if (!silent) {
+                    setDetailLoading(false);
+                }
+            });
+    }, []);
 
     useEffect(() => {
         selectedIdRef.current = selectedId;
@@ -50,14 +68,18 @@ function AdminPage({adminKey, onBack}) {
 
     // Poll selected game detail every 5s when a game is selected
     useEffect(() => {
-        if (!selectedId) { return; }
+        if (!selectedId) {
+            return;
+        }
         const interval = setInterval(() => refreshDetail(true), 5000);
         return () => clearInterval(interval);
     }, [selectedId, refreshDetail]);
 
     useEffect(() => {
         const conn = new signalR.HubConnectionBuilder()
-            .withUrl(`${SERVER_URL}/admin-hub`)
+            .withUrl(`${SERVER_URL}/admin-hub`, {
+                accessTokenFactory: () => authService.getToken(),
+            })
             .withAutomaticReconnect()
             .configureLogging(signalR.LogLevel.Warning)
             .build();
@@ -68,7 +90,17 @@ function AdminPage({adminKey, onBack}) {
         });
         conn.on('Error', msg => toast(msg, 'error'));
 
-        conn.start().catch(() => toast('Admin hub failed to connect', 'error'));
+        console.log('[AdminHub] useEffect fired, _account=', authService._account);
+        authService.getToken()
+            .then(token => {
+                console.log('[AdminHub] getToken resolved, token=', token ? token.substring(0, 20) + '...' : null);
+                if (!token) {
+                    return;
+                }
+                conn.start().catch(e => console.error('[AdminHub] connect failed:', e));
+            })
+            .catch(e => console.error('[AdminHub] getToken threw:', e));
+
         adminConnRef.current = conn;
 
         return () => conn.stop();
@@ -93,46 +125,76 @@ function AdminPage({adminKey, onBack}) {
         selectedIdRef.current = gid;
         setGameDetail(null);
         setDetailLoading(true);
-        adminInvoke('GetGameDetails', gid, adminKey).catch(() => {});
+        adminInvoke('GetGameDetails', gid).catch(() => {
+        });
     };
 
     const handlePause = () => {
-        adminInvoke('PauseGame', selectedId, adminKey)
-            .then(() => { toast('Game paused', 'success'); fetchGames(true); refreshDetail(false); })
-            .catch(() => {});
+        adminInvoke('PauseGame', selectedId)
+            .then(() => {
+                toast('Game paused', 'success');
+                fetchGames(true);
+                refreshDetail(false);
+            })
+            .catch(() => {
+            });
     };
 
     const handleResume = () => {
-        adminInvoke('ResumeGame', selectedId, adminKey)
-            .then(() => { toast('Game resumed', 'success'); fetchGames(true); refreshDetail(false); })
-            .catch(() => {});
+        adminInvoke('ResumeGame', selectedId)
+            .then(() => {
+                toast('Game resumed', 'success');
+                fetchGames(true);
+                refreshDetail(false);
+            })
+            .catch(() => {
+            });
     };
 
     const handleForceEnd = () => {
-        if (!confirm('Force end this game?')) { return; }
-        adminInvoke('ForceEndGame', selectedId, adminKey)
+        if (!confirm('Force end this game?')) {
+            return;
+        }
+        adminInvoke('ForceEndGame', selectedId)
             .then(() => {
                 toast('Game ended', 'success');
                 setSelectedId(null);
                 setGameDetail(null);
                 fetchGames(false);
             })
-            .catch(() => {});
+            .catch(() => {
+            });
     };
 
     const handleKick = (player) => {
-        if (!confirm(`Kick ${player.name}?`)) { return; }
-        adminInvoke('KickPlayer', selectedId, player.id, adminKey)
-            .then(() => { toast('Player kicked', 'success'); refreshDetail(false); })
-            .catch(() => {});
+        if (!confirm(`Kick ${player.name}?`)) {
+            return;
+        }
+        adminInvoke('KickPlayer', selectedId, player.id)
+            .then(() => {
+                toast('Player kicked', 'success');
+                refreshDetail(false);
+            })
+            .catch(() => {
+            });
     };
 
     const handleAddBots = () => {
-        if (botCount < 1) { return; }
-        adminInvoke('AddBotToGame', selectedId, adminKey, botCount)
-            .then(() => { toast(`${botCount} bot(s) added`, 'success'); refreshDetail(false); fetchGames(true); })
-            .catch(() => {});
+        if (botCount < 1) {
+            return;
+        }
+        adminInvoke('AddBotToGame', selectedId, botCount)
+            .then(() => {
+                toast(`${botCount} bot(s) added`, 'success');
+                refreshDetail(false);
+                fetchGames(true);
+            })
+            .catch(() => {
+            });
     };
+
+    const GAME_STATUS = {0: 'Waiting', 1: 'InProgress', 2: 'Finished', 3: 'Paused'};
+    const resolveStatus = (s) => typeof s === 'number' ? GAME_STATUS[s] : s;
 
     const statusBadgeClass = (status) => ({
         Waiting: 'bg-yellow',
@@ -143,7 +205,7 @@ function AdminPage({adminKey, onBack}) {
 
     return (
         <div className="page-enter">
-            <Header page="admin"/>
+            <Header page="admin" onBack={onBack}/>
             <div className="alayout">
                 <div className="aside">
                     <div style={{
@@ -169,7 +231,7 @@ function AdminPage({adminKey, onBack}) {
                                 {game.gameId}
                             </code>
                             <div style={{display: 'flex', gap: 5, alignItems: 'center', marginTop: 5}}>
-                                <span className={`badge ${statusBadgeClass(game.status)}`}>{game.status}</span>
+                                <span className={`badge ${statusBadgeClass(resolveStatus(game.status))}`}>{resolveStatus(game.status)}</span>
                                 <span style={{fontSize: 10, color: '#aaa'}}>{game.playerCount} players</span>
                             </div>
                         </div>
@@ -193,14 +255,32 @@ function AdminPage({adminKey, onBack}) {
                                     <code style={{letterSpacing: 2}}>{selectedId}</code>
                                 </h2>
                                 {gameDetail && (
-                                    <span className={`badge ${statusBadgeClass(gameDetail.status)}`}>{gameDetail.status}</span>
+                                    <span
+                                        className={`badge ${statusBadgeClass(resolveStatus(gameDetail.status))}`}>{resolveStatus(gameDetail.status)}</span>
                                 )}
                             </div>
 
                             <div style={{display: 'flex', gap: 9, flexWrap: 'wrap', marginBottom: 22}}>
-                                <button className="btn btn-ghost btn-sm" onClick={() => refreshDetail(false)}>↻ Refresh</button>
-                                <button className="btn btn-warn btn-sm" onClick={handlePause}>⏸ Pause</button>
-                                <button className="btn btn-green btn-sm" onClick={handleResume}>▶ Resume</button>
+                                <button className="btn btn-ghost btn-sm" onClick={() => refreshDetail(false)}>↻
+                                    Refresh
+                                </button>
+                                {(() => {
+                                    const status = resolveStatus(gameDetail?.status ?? games.find(g => g.gameId === selectedId)?.status);
+                                    return (<>
+                                        <button
+                                            className="btn btn-warn btn-sm"
+                                            onClick={handlePause}
+                                            disabled={status !== 'InProgress'}
+                                            style={{opacity: status !== 'InProgress' ? 0.35 : 1}}
+                                        >⏸ Pause</button>
+                                        <button
+                                            className="btn btn-green btn-sm"
+                                            onClick={handleResume}
+                                            disabled={status !== 'Paused'}
+                                            style={{opacity: status !== 'Paused' ? 0.35 : 1}}
+                                        >▶ Resume</button>
+                                    </>);
+                                })()}
                                 <button className="btn btn-red btn-sm" onClick={handleForceEnd}>⛔ Force End</button>
                             </div>
 
@@ -213,17 +293,30 @@ function AdminPage({adminKey, onBack}) {
 
                             {gameDetail && (
                                 <>
-                                    {gameDetail.status !== 'Finished' && (
+                                    {resolveStatus(gameDetail.status) !== 'Finished' && (
                                         <div className="card" style={{marginBottom: 14}}>
                                             <div className="slabel">🤖 Add Bots</div>
                                             <div style={{display: 'flex', alignItems: 'center', gap: 9}}>
-                                                <button className="btn btn-ghost btn-sm" style={{padding: '3px 10px', fontSize: 15}}
-                                                        onClick={() => setBotCount(c => Math.max(1, c - 1))}>−</button>
-                                                <span style={{fontSize: 13, fontWeight: 700, minWidth: 22, textAlign: 'center'}}>{botCount}</span>
-                                                <button className="btn btn-ghost btn-sm" style={{padding: '3px 10px', fontSize: 15}}
-                                                        onClick={() => setBotCount(c => Math.min(7, c + 1))}>+</button>
-                                                <span style={{fontSize: 11, color: '#aaa'}}>bot{botCount !== 1 ? 's' : ''}</span>
-                                                <button className="btn btn-ink btn-sm" style={{marginLeft: 'auto'}} onClick={handleAddBots}>
+                                                <button className="btn btn-ghost btn-sm"
+                                                        style={{padding: '3px 10px', fontSize: 15}}
+                                                        onClick={() => setBotCount(c => Math.max(1, c - 1))}>−
+                                                </button>
+                                                <span style={{
+                                                    fontSize: 13,
+                                                    fontWeight: 700,
+                                                    minWidth: 22,
+                                                    textAlign: 'center'
+                                                }}>{botCount}</span>
+                                                <button className="btn btn-ghost btn-sm"
+                                                        style={{padding: '3px 10px', fontSize: 15}}
+                                                        onClick={() => setBotCount(c => Math.min(7, c + 1))}>+
+                                                </button>
+                                                <span style={{
+                                                    fontSize: 11,
+                                                    color: '#aaa'
+                                                }}>bot{botCount !== 1 ? 's' : ''}</span>
+                                                <button className="btn btn-ink btn-sm" style={{marginLeft: 'auto'}}
+                                                        onClick={handleAddBots}>
                                                     + Add
                                                 </button>
                                             </div>
@@ -236,7 +329,7 @@ function AdminPage({adminKey, onBack}) {
                                             {[
                                                 ['Turn', gameDetail.turn],
                                                 ['Players', gameDetail.playerCount],
-                                                ['Status', gameDetail.status],
+                                                ['Status', resolveStatus(gameDetail.status)],
                                             ].map(([label, value]) => (
                                                 <div key={label} style={{
                                                     textAlign: 'center',

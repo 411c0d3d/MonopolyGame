@@ -148,7 +148,7 @@ function App() {
                     isAdmin={isAdmin}
                     onCreateAndJoin={handleCreateAndJoin}
                     onJoin={handleJoin}
-                    onAdmin={() => setPage('admin')}
+                    onAdmin={() => { if (isAdmin) { setPage('admin'); } }}
                     onLogout={() => authService.logout()}
                 />
             )}
@@ -162,7 +162,7 @@ function App() {
                     onLeave={handleLeave}
                     isCreator={isCreator}
                     isAdmin={isAdmin}
-                    onAdmin={() => setPage('admin')}
+                    onAdmin={() => { if (isAdmin) { setPage('admin'); } }}
                 />
             )}
             {page === 'game' && (
@@ -173,11 +173,11 @@ function App() {
                     gameState={gameState}
                     onLeave={handleLeave}
                     isAdmin={isAdmin}
-                    onAdmin={() => setPage('admin')}
+                    onAdmin={() => { if (isAdmin) { setPage('admin'); } }}
                 />
             )}
             {page === 'admin' && (
-                <AdminPage onBack={() => setPage(gameId ? 'game' : 'home')}/>
+                <AdminPage isAdmin={isAdmin} onBack={() => setPage(gameId ? 'game' : 'home')}/>
             )}
             <Toasts list={toasts}/>
         </AppProvider>

@@ -27,6 +27,7 @@
     auth_service.js must come before hub_service.js (hub uses authService.getToken).
     login_page.js must come before app.js.
     Babel transpiles JSX at runtime via type="text/babel".
+    globals.js is an IDE-only type shim and must NOT be loaded here.
 -->
 <script type="text/babel" src="animation/animation.js"></script>
 <script type="text/babel" src="animation/dice3d.js"></script>
@@ -43,7 +44,6 @@
 <script type="text/babel" src="pages/lobby_page.js"></script>
 <script type="text/babel" src="pages/game_page.js"></script>
 <script type="text/babel" src="pages/admin_page.js"></script>
-<script type="text/babel" src="globals.js"></script>
 <script type="text/babel" src="app.js"></script>
 
 </body>

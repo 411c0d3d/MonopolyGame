@@ -6,11 +6,19 @@
  * Sticky top navigation bar.
  * @param {{ page: string, gameId?: string, me?: string, isAdmin?: boolean, onAdmin?: function, onLeave?: function }} props
  */
-function Header({page, gameId, me, isAdmin, onAdmin, onLeave}) {
+function Header({page, gameId, me, isAdmin, onAdmin, onLeave, onBack}) {
     return (
         <div className="header">
-            <div className="logo-icon">🎲</div>
-            <span className="logo-text">Monopoly</span>
+            <div
+                className="logo-icon"
+                onClick={onBack}
+                style={{cursor: onBack ? 'pointer' : 'default'}}
+            >🎲</div>
+            <span
+                className="logo-text"
+                onClick={onBack}
+                style={{cursor: onBack ? 'pointer' : 'default'}}
+            >Monopoly</span>
             <div className="header-right">
                 {page === 'lobby' && (
                     <span style={{fontSize: 12, color: '#aaa'}}>
