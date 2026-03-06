@@ -4,9 +4,9 @@
 
 Multiplayer Monopoly built on ASP.NET Core 10 with a SignalR hub and a React client served through a static HTML shell.
 Complete game engine covering all classic rules — card system, trading, jail, rent, and buildings. Active game state is
-held in memory for performance and additionally persisted via a swappable repository layer — either JSON files for local
-development or Azure Cosmos DB for production. Authentication is handled by Microsoft Entra External ID with social
-login (Google, Microsoft). Admin access is enforced by role claim, not a plain-text key.
+held in memory for performance and persistance is swappable between repository layer with — either Azure Cosmos DB for production or JSON files for local
+development via App settings. Authentication is handled by Microsoft Entra External ID with social
+login (Google, Microsoft). Admin access is enforced by a role claim.
 
 ---
 
@@ -126,7 +126,7 @@ MonopolyClient/
 
 ### Models — Data Only
 
-Dumb containers. No business logic lives in models.
+Plain containers. No business logic lives in models.
 
 **GameState** — live game instance  
 `GameId` · `HostId` · `Status` (Waiting | InProgress | Finished | Paused) · `Board` · `Players` · `CurrentPlayerIndex` ·
