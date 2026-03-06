@@ -41,13 +41,13 @@ public sealed class CosmosGameRepository : IGameRepository
             _container = await dbResponse.Database.CreateContainerIfNotExistsAsync(
                 id: _collectionId,
                 partitionKeyPath: "/id",
-                throughput: 400);
+                throughput: 900);
 
             // Ensure users container also exists
             await dbResponse.Database.CreateContainerIfNotExistsAsync(
                 id: _collectionId.Replace("games", "users"),
                 partitionKeyPath: "/id",
-                throughput: 400);
+                throughput: 900);
 
             _logger.LogInformation(
                 "Cosmos DB ready: {Database}/{Collection}", _databaseId, _collectionId);

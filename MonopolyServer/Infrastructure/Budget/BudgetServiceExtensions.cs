@@ -4,8 +4,9 @@ using Microsoft.Extensions.Options;
 namespace MonopolyServer.Infrastructure.Budget;
 
 /// <summary>
-/// DI registration for the budget guard feature.
+/// DI registration extensions for the budget guard feature.
 /// Must be called after AddGamePersistence so CosmosClient is already registered.
+/// No-ops cleanly when UseDatabase is false — safe to call unconditionally from Program.cs.
 /// </summary>
 public static class BudgetServiceExtensions
 {
@@ -13,12 +14,15 @@ public static class BudgetServiceExtensions
 
     /// <summary>
     /// Registers BudgetGuardService as a hosted singleton and wires its Cosmos container.
-    /// The budget container is created in the same database as games and users.
+    /// Skips registration entirely when PersistenceSettings:UseDatabase is false.
     /// </summary>
     public static IServiceCollection AddBudgetGuard(
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        var useDatabase = configuration.GetValue<bool>("PersistenceSettings:UseDatabase");
+        if (!useDatabase) { return services; }
+
         services.AddSingleton<BudgetGuardService>(sp =>
         {
             var cosmosSettings = sp.GetRequiredService<IOptions<CosmosSettings>>().Value;
@@ -35,11 +39,15 @@ public static class BudgetServiceExtensions
     }
 
     /// <summary>
-    /// Ensures the budget Cosmos container exists on startup.
-    /// Call from InitializeGameManagerAsync or app startup before RunAsync.
+    /// Ensures the budget Cosmos container exists before the host starts serving requests.
+    /// Skips when PersistenceSettings:UseDatabase is false.
+    /// Call after app.Build() and before app.RunAsync().
     /// </summary>
     public static async Task InitializeBudgetContainerAsync(this WebApplication app)
     {
+        var useDatabase = app.Configuration.GetValue<bool>("PersistenceSettings:UseDatabase");
+        if (!useDatabase) { return; }
+
         var cosmosSettings = app.Services.GetRequiredService<IOptions<CosmosSettings>>().Value;
         var client         = app.Services.GetRequiredService<CosmosClient>();
         var db             = client.GetDatabase(cosmosSettings.DatabaseId);

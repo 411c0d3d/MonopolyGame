@@ -1,7 +1,5 @@
 ﻿using System.Net;
 using Microsoft.Azure.Cosmos;
-using Microsoft.Extensions.Options;
-using MonopolyServer.Infrastructure;
 
 namespace MonopolyServer.Infrastructure.Budget;
 
@@ -9,6 +7,8 @@ namespace MonopolyServer.Infrastructure.Budget;
 /// Tracks Azure Container Apps free-tier consumption in memory and flushes to Cosmos periodically.
 /// Survives container restarts by reloading state from Cosmos on startup.
 /// Enforces hard limits on HTTP requests, vCPU-seconds, concurrent games, and connections.
+/// HTTP request counting is lock-free via Interlocked on a backing field.
+/// CPU accrual and Cosmos persistence are serialized under a SemaphoreSlim on the background timer only.
 /// </summary>
 public sealed class BudgetGuardService : BackgroundService
 {
@@ -16,14 +16,17 @@ public sealed class BudgetGuardService : BackgroundService
     private readonly ILogger<BudgetGuardService> _logger;
 
     private BudgetDocument _budget = new();
+    private long _consumedHttpRequests;
     private int _activeConnections;
     private int _activeGames;
     private DateTime _serverStartedAt = DateTime.UtcNow;
 
-    private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly SemaphoreSlim _flushLock = new(1, 1);
     private static readonly TimeSpan FlushInterval = TimeSpan.FromMinutes(5);
 
-    /// <summary>Accepts the Cosmos budget container resolved from DI.</summary>
+    /// <summary>
+    /// Accepts the Cosmos budget container resolved from DI.
+    /// </summary>
     public BudgetGuardService(Container container, ILogger<BudgetGuardService> logger)
     {
         _container = container;
@@ -42,38 +45,41 @@ public sealed class BudgetGuardService : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             await Task.Delay(FlushInterval, stoppingToken);
-            FlushCpuAccrual();
-            await SaveToCosmosAsync();
-            MaybeResetMonth();
+            await FlushAsync();
         }
 
-        await SaveToCosmosAsync();
+        await FlushAsync();
     }
 
     // -------------------------------------------------------------------------
     // Guard checks — called from hubs and middleware
     // -------------------------------------------------------------------------
 
-    /// <summary>Returns false and logs when the HTTP request budget is exhausted.</summary>
+    /// <summary>
+    /// Returns false and logs when the monthly HTTP request budget is exhausted.
+    /// Lock-free — safe to call on every incoming request.
+    /// </summary>
     public bool TryConsumeRequest()
     {
-        var budgetConsumedHttpRequests = _budget.ConsumedHttpRequests;
-        Interlocked.Increment(ref budgetConsumedHttpRequests);
+        var consumed = Interlocked.Increment(ref _consumedHttpRequests);
 
-        if (budgetConsumedHttpRequests > _budget.MaxHttpRequests)
+        if (consumed > _budget.MaxHttpRequests)
         {
             _logger.LogWarning("BudgetGuard: HTTP request limit reached ({Consumed}/{Max})",
-                budgetConsumedHttpRequests, _budget.MaxHttpRequests);
+                consumed, _budget.MaxHttpRequests);
             return false;
         }
 
         return true;
     }
 
-    /// <summary>Returns false when adding a connection would exceed the concurrent connection cap.</summary>
+    /// <summary>
+    /// Returns false when adding a connection would exceed the concurrent connection cap.
+    /// </summary>
     public bool TryAddConnection()
     {
         var current = Interlocked.Increment(ref _activeConnections);
+
         if (current > _budget.MaxConcurrentConnections)
         {
             Interlocked.Decrement(ref _activeConnections);
@@ -85,14 +91,19 @@ public sealed class BudgetGuardService : BackgroundService
         return true;
     }
 
-    /// <summary>Decrements the active connection counter on disconnect.</summary>
+    /// <summary>
+    /// Decrements the active connection counter on disconnect.
+    /// </summary>
     public void ReleaseConnection() =>
         Interlocked.Decrement(ref _activeConnections);
 
-    /// <summary>Returns false when adding a game would exceed the concurrent game cap.</summary>
+    /// <summary>
+    /// Returns false when adding a game would exceed the concurrent game cap.
+    /// </summary>
     public bool TryAddGame()
     {
         var current = Interlocked.Increment(ref _activeGames);
+
         if (current > _budget.MaxConcurrentGames)
         {
             Interlocked.Decrement(ref _activeGames);
@@ -104,23 +115,28 @@ public sealed class BudgetGuardService : BackgroundService
         return true;
     }
 
-    /// <summary>Decrements the active game counter when a game ends.</summary>
+    /// <summary>
+    /// Decrements the active game counter when a game ends.
+    /// </summary>
     public void ReleaseGame() =>
         Interlocked.Decrement(ref _activeGames);
 
-    /// <summary>Returns a snapshot of current consumption for the admin panel.</summary>
+    /// <summary>
+    /// Returns a point-in-time snapshot of current consumption for the admin panel.
+    /// CPU seconds include accrual since the last flush.
+    /// </summary>
     public BudgetSnapshot GetSnapshot() => new()
     {
-        ConsumedCpuSeconds    = _budget.ConsumedCpuSeconds + ElapsedCpuSeconds(),
-        MaxCpuSeconds         = _budget.MaxCpuSeconds,
-        ConsumedHttpRequests  = _budget.ConsumedHttpRequests,
-        MaxHttpRequests       = _budget.MaxHttpRequests,
-        ActiveConnections     = _activeConnections,
+        ConsumedCpuSeconds       = _budget.ConsumedCpuSeconds + ElapsedCpuSeconds(),
+        MaxCpuSeconds            = _budget.MaxCpuSeconds,
+        ConsumedHttpRequests     = Interlocked.Read(ref _consumedHttpRequests),
+        MaxHttpRequests          = _budget.MaxHttpRequests,
+        ActiveConnections        = Interlocked.CompareExchange(ref _activeConnections, 0, 0),
         MaxConcurrentConnections = _budget.MaxConcurrentConnections,
-        ActiveGames           = _activeGames,
-        MaxConcurrentGames    = _budget.MaxConcurrentGames,
-        WindowStart           = _budget.WindowStart,
-        LastSavedAt           = _budget.LastSavedAt,
+        ActiveGames              = Interlocked.CompareExchange(ref _activeGames, 0, 0),
+        MaxConcurrentGames       = _budget.MaxConcurrentGames,
+        WindowStart              = _budget.WindowStart,
+        LastSavedAt              = _budget.LastSavedAt,
     };
 
     // -------------------------------------------------------------------------
@@ -130,15 +146,34 @@ public sealed class BudgetGuardService : BackgroundService
     private double ElapsedCpuSeconds() =>
         (DateTime.UtcNow - _serverStartedAt).TotalSeconds;
 
-    private void FlushCpuAccrual()
+    private async Task FlushAsync()
     {
-        _budget.ConsumedCpuSeconds += ElapsedCpuSeconds();
-        _serverStartedAt = DateTime.UtcNow;
-
-        if (_budget.ConsumedCpuSeconds > _budget.MaxCpuSeconds)
+        await _flushLock.WaitAsync();
+        try
         {
-            _logger.LogWarning("BudgetGuard: vCPU-seconds limit reached ({Consumed:F0}/{Max:F0})",
-                _budget.ConsumedCpuSeconds, _budget.MaxCpuSeconds);
+            _budget.ConsumedCpuSeconds   += ElapsedCpuSeconds();
+            _budget.ConsumedHttpRequests  = Interlocked.Read(ref _consumedHttpRequests);
+            _budget.LastSavedAt           = DateTime.UtcNow;
+            _serverStartedAt              = DateTime.UtcNow;
+
+            MaybeResetMonth();
+
+            if (_budget.ConsumedCpuSeconds > _budget.MaxCpuSeconds)
+            {
+                _logger.LogWarning("BudgetGuard: vCPU-seconds limit reached ({Consumed:F0}/{Max:F0})",
+                    _budget.ConsumedCpuSeconds, _budget.MaxCpuSeconds);
+            }
+
+            await _container.UpsertItemAsync(_budget, new PartitionKey(_budget.Id));
+            _logger.LogDebug("BudgetGuard: Flushed to Cosmos");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "BudgetGuard: Failed to flush to Cosmos");
+        }
+        finally
+        {
+            _flushLock.Release();
         }
     }
 
@@ -150,6 +185,7 @@ public sealed class BudgetGuardService : BackgroundService
         _logger.LogInformation("BudgetGuard: Monthly window reset");
         _budget.ConsumedCpuSeconds   = 0;
         _budget.ConsumedHttpRequests = 0;
+        Interlocked.Exchange(ref _consumedHttpRequests, 0);
         _budget.WindowStart          = currentWindowStart;
     }
 
@@ -162,36 +198,18 @@ public sealed class BudgetGuardService : BackgroundService
                 new PartitionKey(BudgetDocument.DocumentId));
 
             _budget = response.Resource;
-            _logger.LogInformation("BudgetGuard: Loaded budget from Cosmos — window={Window}",
-                _budget.WindowStart);
+            Interlocked.Exchange(ref _consumedHttpRequests, _budget.ConsumedHttpRequests);
+            _logger.LogInformation("BudgetGuard: Loaded from Cosmos — window={Window}", _budget.WindowStart);
         }
         catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
             _budget = new BudgetDocument();
-            await SaveToCosmosAsync();
+            await _container.UpsertItemAsync(_budget, new PartitionKey(_budget.Id));
             _logger.LogInformation("BudgetGuard: Initialized new budget document in Cosmos");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "BudgetGuard: Failed to load from Cosmos — using defaults");
-        }
-    }
-
-    private async Task SaveToCosmosAsync()
-    {
-        await _lock.WaitAsync();
-        try
-        {
-            _budget.LastSavedAt = DateTime.UtcNow;
-            await _container.UpsertItemAsync(_budget, new PartitionKey(_budget.Id));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "BudgetGuard: Failed to save budget to Cosmos");
-        }
-        finally
-        {
-            _lock.Release();
         }
     }
 }
