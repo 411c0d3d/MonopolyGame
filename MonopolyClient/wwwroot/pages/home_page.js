@@ -62,14 +62,14 @@ function HomePage({user, isAdmin, onCreateAndJoin, onJoin, onAdmin, onLogout}) {
                     {/* Logged-in user identity card */}
                     <div className="card" style={{marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12}}>
                         <div className="pav" style={{background: COLORS[0], color: '#fff', flexShrink: 0}}>
-                            {(user?.name || '?')[0].toUpperCase()}
+                            {(user?.name || '?')[0].toUpperCase()}{(user?.name || '?')[1].toUpperCase()}
                         </div>
                         <div style={{flex: 1, minWidth: 0}}>
                             <div style={{fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
                                 {user?.name}
                             </div>
                             <div style={{fontSize: 11, color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
-                                {user?.email}
+                                {user?.objectId}
                                 {isAdmin && <span className="badge bg-yellow" style={{marginLeft: 6}}>Admin</span>}
                             </div>
                         </div>
@@ -109,22 +109,35 @@ function HomePage({user, isAdmin, onCreateAndJoin, onJoin, onAdmin, onLogout}) {
                                 </div>
                             )}
                             <div className="game-browser">
-                                {games.map(game => (
-                                    <div key={game.gameId} className="game-row" onClick={() => onJoin(game.gameId)}>
-                                        <div>
-                                            <code style={{fontFamily: 'monospace', fontWeight: 700, letterSpacing: 2, fontSize: 14}}>
-                                                {game.gameId}
-                                            </code>
-                                            <div style={{fontSize: 11, color: '#aaa', marginTop: 2}}>
-                                                Host: {game.hostName}&nbsp;·&nbsp;{game.playerCount}/{game.maxPlayers} players
+                                {games.map(game => {
+                                    const isInGame = game.hostId === user?.objectId
+                                        || game.hostName === user?.name;
+                                    return (
+                                        <div
+                                            key={game.gameId}
+                                            className="game-row"
+                                            onClick={() => onJoin(game.gameId)}
+                                            style={isInGame ? {
+                                                borderColor: 'rgba(var(--gold-rgb, 212,175,55), 0.45)',
+                                                background: 'rgba(var(--gold-rgb, 212,175,55), 0.06)',
+                                            } : undefined}
+                                        >
+                                            <div>
+                                                <code style={{fontFamily: 'monospace', fontWeight: 700, letterSpacing: 2, fontSize: 14}}>
+                                                    {game.gameId}
+                                                </code>
+                                                <div style={{fontSize: 11, color: '#aaa', marginTop: 2}}>
+                                                    Host: {game.hostName}&nbsp;·&nbsp;{game.playerCount}/{game.maxPlayers} players
+                                                </div>
+                                            </div>
+                                            <div style={{marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center'}}>
+                                                {isInGame && <span className="badge bg-yellow">You're in</span>}
+                                                <span className="badge bg-green">Waiting</span>
+                                                <span style={{fontSize: 17}}>→</span>
                                             </div>
                                         </div>
-                                        <div style={{marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center'}}>
-                                            <span className="badge bg-green">Waiting</span>
-                                            <span style={{fontSize: 17}}>→</span>
-                                        </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                             <button
                                 className="btn btn-gold btn-full"

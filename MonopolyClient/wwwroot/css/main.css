@@ -437,16 +437,15 @@ h1, h2, h3 {
     text-transform: uppercase;
     letter-spacing: 1px;
     color: rgba(255, 255, 255, 0.38);
-    margin-bottom: 7px;
 }
 
 .div {
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: 1px;
     color: rgba(255, 255, 255, 0.25);
     font-size: 10px;
-    margin: 13px 0;
+    margin: 1px 0;
 }
 
 .div::before, .div::after {
@@ -741,7 +740,7 @@ h1, h2, h3 {
 .gcash {
     font-size: 13px;
     font-weight: 700;
-    color: var(--green-light);
+    color: var(--gold);
 }
 
 .gstat {
@@ -1342,7 +1341,7 @@ h1, h2, h3 {
 /* ─── Info Box (left sidebar) ────────────────────────────────────────────── */
 
 .info-box {
-    padding: 10px 13px;
+    padding: 5px 5px;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.11);
     border-radius: 10px;

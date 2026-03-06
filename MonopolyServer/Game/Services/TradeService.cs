@@ -15,8 +15,6 @@ public class TradeService
     /// <summary>
     /// Constructor with dependency injection of GameRoomManager for accessing game state and ILogger for logging trade actions.
     /// </summary>
-    /// <param name="roomManager"></param>
-    /// <param name="logger"></param>
     public TradeService(GameRoomManager roomManager, ILogger<TradeService> logger)
     {
         _roomManager = roomManager;
@@ -24,7 +22,9 @@ public class TradeService
     }
 
     /// <summary>
-    /// Propose a trade between two players.
+    /// Proposes a trade between two players.
+    /// Any existing pending offer from the same sender is cancelled first,
+    /// ensuring only one active offer per sender exists at a time.
     /// </summary>
     public TradeOffer? ProposeTrade(string gameId, string fromPlayerId, string toPlayerId, TradeOffer tradeOffer)
     {
@@ -35,6 +35,18 @@ public class TradeService
 
         _roomManager.MutateGame(gameId, (game, engine) =>
         {
+            // Cancel any prior pending offer from this sender before proposing a new one.
+            var prior = game.PendingTrades.FirstOrDefault(t =>
+                t.FromPlayerId == fromPlayerId && t.Status == TradeStatus.Pending);
+
+            if (prior != null)
+            {
+                engine?.CancelTrade(prior.Id, fromPlayerId);
+                _logger.LogInformation("Prior trade {TradeId} from {Player} replaced by new offer",
+                    prior.Id,
+                    game.GetPlayerById(fromPlayerId)?.Name);
+            }
+
             result = engine?.ProposeTrade(tradeOffer);
 
             if (result != null)
