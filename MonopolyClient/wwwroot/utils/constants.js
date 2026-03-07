@@ -1,8 +1,8 @@
 /* globals React */
 // utils/constants.js — loaded first; defines all shared app globals.
 
-const SERVER_URL = 'http://localhost:5500';
-
+const SERVER_URL = "https://monopoly-game.jollyfield-95a61d31.germanywestcentral.azurecontainerapps.io";
+window.SERVER_URL = SERVER_URL;
 // ---------------------------------------------------------------------------
 // Auth — Microsoft Entra External ID (CIAM)
 // Update these values to match your app registration.

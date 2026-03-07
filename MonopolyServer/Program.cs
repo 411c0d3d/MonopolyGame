@@ -30,13 +30,16 @@ public class Program
         {
             options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
         });
+
+        // CORS is only needed in development — in production the server serves the client
+        // from the same origin so cross-origin requests do not occur.
         builder.Services.AddCors(options =>
         {
             options.AddPolicy("AllowAll", policy =>
             {
                 policy.WithOrigins(
-                        "http://localhost:5500", // For Server api endpoints
-                        "http://localhost:5400") // For Client CORS
+                        "http://localhost:5500",
+                        "http://localhost:5400")
                     .AllowAnyMethod()
                     .AllowAnyHeader()
                     .AllowCredentials();
@@ -76,8 +79,16 @@ public class Program
 
         // Server-only Middleware
         app.UseMiddleware<BudgetMiddleware>();
+        
+        // Static files served before CORS — same-origin in production, no-op for API calls
+        app.UseStaticFiles();
+        
         app.UseRouting();
-        app.UseCors("AllowAll");
+
+        if (app.Environment.IsDevelopment())
+        {
+            app.UseCors("AllowAll");
+        }
 
         // Auth middleware must be between routing and endpoints
         app.UseAuthentication();
@@ -115,8 +126,9 @@ public class Program
             return Results.Ok(new { isAdmin = user.IsInRole(UserClaimsTransformation.AdminRole) });
         }).RequireAuthorization();
 
-        // Must complete before RunAsync — guarantees GameRoomManager is fully loaded
-        // before GameCleanupService.ExecuteAsync fires on startup.
+        // Catch-all — serve index.html for any unmatched path (React client routing)
+        app.MapFallbackToFile("index.html");
+
         await app.InitializeBudgetContainerAsync();
         await app.InitializeGameManagerAsync();
 
