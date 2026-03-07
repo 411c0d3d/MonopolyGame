@@ -242,6 +242,7 @@ ServiceFabricBackup/
 node_modules/
 package-lock.json
 yarn.lock
+wwwroot-compiled/
 
 # Python Tools
 __pycache__/

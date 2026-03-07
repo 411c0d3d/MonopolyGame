@@ -1,0 +1,13 @@
+{
+  "name": "monopoly-client",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "babel wwwroot/animation wwwroot/components wwwroot/pages wwwroot/utils wwwroot/app.js --out-dir wwwroot-compiled --presets @babel/preset-react --extensions .js --no-babelrc --minified"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.24.0",
+    "@babel/core": "^7.24.0",
+    "@babel/preset-react": "^7.24.0"
+  }
+}

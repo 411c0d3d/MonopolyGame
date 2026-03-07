@@ -1,50 +1,34 @@
-# Stage 1 — Build the client and pre-compile JSX
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS client-build
-WORKDIR /src
-COPY MonopolyClient/ ./MonopolyClient/
-RUN dotnet publish MonopolyClient/MonopolyClient.csproj -c Release -o /client-out
-
-# Install Node.js 20 via NodeSource
-RUN apt-get update && apt-get install -y curl && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    node --version && npm --version
-
-# Set up local npm project for Babel — avoids global scope resolution issues
-WORKDIR /babel
-RUN npm init -y && \
-    npm install @babel/core @babel/cli @babel/preset-react
-
-# Compile and minify all JS files in wwwroot in place
-RUN /babel/node_modules/.bin/babel /client-out/wwwroot \
-    --out-dir /client-out/wwwroot \
-    --presets @babel/preset-react \
-    --extensions ".js" \
-    --no-babelrc \
-    --minified && \
-    echo "=== Babel compilation complete ==="
-
+# Stage 1 — Compile client JSX using dedicated Node image
+FROM node:20-alpine AS client-build
+WORKDIR /client
+# Copy package files first for better layer caching
+COPY MonopolyClient/package*.json ./
+RUN npm install
+# Copy source files
+COPY MonopolyClient/wwwroot ./wwwroot
+# Compile JSX to plain JS, output to wwwroot-compiled
+RUN npm run build
+# Copy vendor lib and non-JS assets untouched
+RUN cp -r wwwroot/lib wwwroot-compiled/lib && \
+    cp -r wwwroot/css wwwroot-compiled/css && \
+    cp wwwroot/index.html wwwroot-compiled/index.html && \
+    cp wwwroot/favicon.ico wwwroot-compiled/favicon.ico 2>/dev/null || true
 # Strip type="text/babel" and remove babel-standalone from index.html
-RUN sed -i 's/ type="text\/babel"//g' /client-out/wwwroot/index.html && \
-    sed -i '/babel-standalone/d' /client-out/wwwroot/index.html && \
-    echo "=== index.html cleaned ==="
+RUN sed -i 's/ type="text\/babel"//g' wwwroot-compiled/index.html && \
+    sed -i '/babel-standalone/d' wwwroot-compiled/index.html && \
+    echo "=== Client build complete ==="
 
-# Stage 2 — Build the server
+# Stage 2 — Build server with compiled client assets
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS server-build
 WORKDIR /src
+# Copy compiled client wwwroot into server project before publish
+COPY --from=client-build /client/wwwroot-compiled ./MonopolyServer/wwwroot
 COPY MonopolyServer/ ./MonopolyServer/
 RUN dotnet publish MonopolyServer/MonopolyServer.csproj -c Release -o /server-out
 
 # Stage 3 — Final runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
-
-# Copy server publish output
 COPY --from=server-build /server-out ./
-
-# Merge compiled client wwwroot into server wwwroot
-COPY --from=client-build /client-out/wwwroot ./wwwroot
-
 EXPOSE 8080
-
 ENTRYPOINT ["dotnet", "MonopolyServer.dll"]
