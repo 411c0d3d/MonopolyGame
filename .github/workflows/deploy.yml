@@ -29,12 +29,12 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          docker build -t monopoly411.azurecr.io/monopoly-online:${{ github.sha }} .
-          docker push monopoly411.azurecr.io/monopoly-online:${{ github.sha }}
+          docker build -t monopoly411.azurecr.io/monopoly-game:${{ github.sha }} .
+          docker push monopoly411.azurecr.io/monopoly-game:${{ github.sha }}
 
       - name: Deploy to Azure Container Apps
         run: |
           az containerapp update \
             --name monopoly-game \
             --resource-group monopoly \
-            --image monopoly411.azurecr.io/monopoly-online:${{ github.sha }}
+            --image monopoly411.azurecr.io/monopoly-game:${{ github.sha }}
