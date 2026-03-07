@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "babel wwwroot/animation wwwroot/components wwwroot/pages wwwroot/utils wwwroot/app.js --out-dir wwwroot-compiled --presets @babel/preset-react --extensions .js --no-babelrc --minified"
+    "build": "babel wwwroot --out-dir wwwroot-compiled --presets @babel/preset-react --extensions .js --no-babelrc --minified --ignore wwwroot/lib,wwwroot/globals.js"
   },
   "devDependencies": {
     "@babel/cli": "^7.24.0",
