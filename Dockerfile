@@ -8,11 +8,17 @@ RUN npm install
 COPY MonopolyClient/wwwroot ./wwwroot
 # Compile JSX to plain JS, output to wwwroot-compiled
 RUN npm run build
-# Copy vendor lib and non-JS assets untouched
+# Copy vendor lib, global css dir, and co-located CSS files (e.g. animation/, dice3d/)
 RUN cp -r wwwroot/lib wwwroot-compiled/lib && \
     cp -r wwwroot/css wwwroot-compiled/css && \
     cp wwwroot/index.html wwwroot-compiled/index.html && \
-    cp wwwroot/favicon.ico wwwroot-compiled/favicon.ico 2>/dev/null || true
+    cp wwwroot/favicon.ico wwwroot-compiled/favicon.ico 2>/dev/null || true && \
+    find wwwroot -name "*.css" -not -path "wwwroot/css/*" | \
+        while read f; do \
+            dest="wwwroot-compiled/${f#wwwroot/}"; \
+            mkdir -p "$(dirname "$dest")"; \
+            cp "$f" "$dest"; \
+        done
 # Strip type="text/babel" and remove babel-standalone from index.html
 RUN sed -i 's/ type="text\/babel"//g' wwwroot-compiled/index.html && \
     sed -i '/babel-standalone/d' wwwroot-compiled/index.html && \

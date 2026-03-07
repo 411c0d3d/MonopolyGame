@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "babel wwwroot --out-dir wwwroot-compiled --presets @babel/preset-react --extensions .js --no-babelrc --minified --ignore wwwroot/lib,wwwroot/globals.js"
+    "build": "babel wwwroot --out-dir wwwroot-compiled --presets @babel/preset-react --extensions .js --no-babelrc --minified --ignore wwwroot/lib,wwwroot/globals.js && terser wwwroot-compiled/app.js wwwroot-compiled/animation/animation.js wwwroot-compiled/animation/dice3d.js wwwroot-compiled/components/*.js wwwroot-compiled/pages/*.js wwwroot-compiled/utils/*.js --compress --mangle --each --output ."
   },
   "devDependencies": {
     "@babel/cli": "^7.24.0",
     "@babel/core": "^7.24.0",
-    "@babel/preset-react": "^7.24.0"
+    "@babel/preset-react": "^7.24.0",
+    "terser": "^5.30.0"
   }
 }
