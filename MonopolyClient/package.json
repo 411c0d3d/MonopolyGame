@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "babel wwwroot --out-dir wwwroot-compiled --presets @babel/preset-react --extensions .js --no-babelrc --minified --ignore wwwroot/lib,wwwroot/globals.js && terser wwwroot-compiled/app.js wwwroot-compiled/animation/animation.js wwwroot-compiled/animation/dice3d.js wwwroot-compiled/components/*.js wwwroot-compiled/pages/*.js wwwroot-compiled/utils/*.js --compress --mangle --each --output ."
+    "build": "babel wwwroot --out-dir wwwroot-compiled --presets @babel/preset-react --extensions .js --no-babelrc --minified --ignore wwwroot/lib,wwwroot/globals.js && find wwwroot-compiled -name '*.js' -not -path '*/lib/*' | while read f; do npx terser \"$f\" --compress --mangle --output \"$f\"; done"
   },
   "devDependencies": {
     "@babel/cli": "^7.24.0",

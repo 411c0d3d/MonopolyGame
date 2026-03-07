@@ -8,7 +8,8 @@ RUN npm install
 COPY MonopolyClient/wwwroot ./wwwroot
 # Compile JSX to plain JS, output to wwwroot-compiled
 RUN npm run build
-# Copy vendor lib, global css dir, and co-located CSS files (e.g. animation/, dice3d/)
+# Copy vendor lib, global css dir, and co-located CSS files (e.g. animation/, pages/)
+# globals.js is an IDE-only shim — excluded from the browser build via --ignore in babel
 RUN cp -r wwwroot/lib wwwroot-compiled/lib && \
     cp -r wwwroot/css wwwroot-compiled/css && \
     cp wwwroot/index.html wwwroot-compiled/index.html && \
