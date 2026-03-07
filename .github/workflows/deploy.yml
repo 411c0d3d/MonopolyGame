@@ -1,9 +1,9 @@
 name: Build and Deploy
 
 on:
-  release:
-    types:
-      - published
+  push:
+    branches:
+      - master
 
 permissions:
   id-token: write
