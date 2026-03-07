@@ -4,24 +4,38 @@ WORKDIR /src
 COPY MonopolyClient/ ./MonopolyClient/
 RUN dotnet publish MonopolyClient/MonopolyClient.csproj -c Release -o /client-out
 
-# Install Node.js and pre-compile all JSX to plain JS
-# Eliminates runtime babel-standalone from the browser entirely
-RUN apt-get update && apt-get install -y nodejs npm && \
-    npm install -g @babel/cli @babel/preset-react
+# Install Node.js 20 via NodeSource — apt version is too old
+RUN apt-get update && apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    node --version && npm --version && \
+    npm install -g @babel/cli @babel/preset-react @babel/core
 
-# Compile and minify all JS files in wwwroot
+# Verify Babel works on one file before compiling everything
+RUN babel /client-out/wwwroot/app.js \
+    --presets @babel/preset-react \
+    --no-babelrc \
+    --out-file /tmp/app-test.js && \
+    echo "=== Babel test succeeded ===" && \
+    head -3 /tmp/app-test.js
+
+# Compile and minify all JS files in wwwroot in place
 RUN babel /client-out/wwwroot \
     --out-dir /client-out/wwwroot \
     --presets @babel/preset-react \
     --extensions ".js" \
     --no-babelrc \
-    --minified
+    --minified && \
+    echo "=== Babel compilation complete ==="
 
-# Strip type="text/babel" from index.html — no longer needed at runtime
+# Strip type="text/babel" from all script tags in index.html
 RUN sed -i 's/ type="text\/babel"//g' /client-out/wwwroot/index.html
 
-# Remove babel-standalone script tag from index.html
+# Remove babel-standalone CDN script tag from index.html
 RUN sed -i '/babel-standalone/d' /client-out/wwwroot/index.html
+
+# Verify babel-standalone is gone
+RUN grep -c "babel-standalone" /client-out/wwwroot/index.html || echo "=== babel-standalone removed ==="
 
 # Stage 2 — Build the server
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS server-build
@@ -36,8 +50,7 @@ WORKDIR /app
 # Copy server publish output
 COPY --from=server-build /server-out ./
 
-# Merge client wwwroot into server wwwroot
-# The server's UseStaticFiles will serve these automatically
+# Merge compiled client wwwroot into server wwwroot
 COPY --from=client-build /client-out/wwwroot ./wwwroot
 
 EXPOSE 8080
