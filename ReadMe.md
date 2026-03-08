@@ -1,11 +1,17 @@
 # Monopoly Online
 
+## [Play Now](https://monopoly-game.jollyfield-95a61d31.germanywestcentral.azurecontainerapps.io/) v1.0.0
+
 A full-featured multiplayer Monopoly built on ASP.NET Core 10 with a SignalR hub and a React client served through a
 static HTML shell. Complete game engine covering all classic rules — card system, trading, jail, rent, and buildings.
 Active game state is held in memory for performance and persistence is swappable between repository implementations —
 either Azure Cosmos DB for production or JSON files for local development via app settings. Authentication is handled
 by Microsoft Entra External ID with social login (Google, Microsoft). Admin access is enforced by a role claim. A
-budget guard service enforces Azure Container Apps free-tier consumption limits and persists monthly counters to Cosmos.
+budget guard service enforces Azure Container Apps consumption limits and persists monthly counters to Cosmos.
+
+See [ADR.md](ADR.md) for the full architecture decision record covering all major design choices and trade-offs.
+
+## Preview
 
 ![GamePlay](GamePlay1.gif)
 
@@ -26,22 +32,22 @@ budget guard service enforces Azure Container Apps free-tier consumption limits 
 - **Turn timer** — auto-advance if a player idles too long
 - **Event log** — toggleable live feed of every game action
 - **Reconnect recovery** — drop and rejoin mid-game; full state is restored via persistent identity
-- **Budget guard** — enforces Azure Container Apps free-tier limits; returns 503 with `Retry-After` before any overage is incurred
+- **Budget guard** — enforces Azure Container Apps limits; returns 503 with `Retry-After` before any overage is incurred
 
 ---
 
 ## Tech Stack
 
-| Layer               | Technology                                                                                                                                 |
-|---------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
-| Server              | ASP.NET Core 10                                                                                                                            |
-| Real-time transport | SignalR                                                                                                                                    |
-| Client              | React (no bundler — plain script tags via index.html)                                                                                      |
+| Layer               | Technology                                                                                                                                |
+|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| Server              | ASP.NET Core 10                                                                                                                           |
+| Real-time transport | SignalR                                                                                                                                   |
+| Client              | React (no bundler — plain script tags via index.html)                                                                                     |
 | Auth                | Microsoft Entra External ID (CIAM) — Google + Microsoft social login, JWT bearer                                                          |
 | State               | In-memory (`Dictionary<string, GameState>`) with swappable `IGameRepository` — JSON files locally, Azure Cosmos DB in production          |
 | Database            | Azure Cosmos DB (NoSQL API, v3 SDK) — `games`, `users`, and `budget` containers                                                           |
-| Serialisation       | Strongly-typed DTOs, System.Text.Json throughout (including Cosmos via custom `StjCosmosSerializer`)                                       |
-| Budget enforcement  | `BudgetGuardService` — lock-free in-memory counters, periodic Cosmos flush, monthly reset                                                  |
+| Serialisation       | Strongly-typed DTOs, System.Text.Json throughout (including Cosmos via custom `StjCosmosSerializer`)                                      |
+| Budget enforcement  | `BudgetGuardService` — lock-free in-memory counters, periodic Cosmos flush, monthly reset                                                 |
 
 ---
 
@@ -159,8 +165,8 @@ MonopolyServer/
 │   └── GameHub.cs                   # SignalR hub — validate · delegate · broadcast only
 ├── Infrastructure/
 │   ├── Auth/
-│   │   ├── AzureAdSettings.cs       # Typed config for Entra External ID
-│   │   └── UserDocument.cs          # Cosmos user document (id = B2C objectId)
+│   │   ├── AzureAdSettings.cs       # Typed config for Microsoft Entra External ID
+│   │   └── UserDocument.cs          # Cosmos user document (id = Microsoft Entra External ID as objectId)
 │   ├── Budget/
 │   │   ├── BudgetDocument.cs        # Cosmos document tracking monthly resource consumption
 │   │   ├── BudgetGuardService.cs    # BackgroundService — in-memory counters, periodic Cosmos flush
@@ -228,7 +234,7 @@ See [ADR.md](ADR.md) for the full architecture decision record covering:
 - **Concurrency model** — how `GameRoomManager` uses a single `_lock` to make compound game operations atomic via `MutateGame`, `ExecuteWithEngine`, and `InitializeEngine`, and why `ConcurrentDictionary` alone is insufficient
 - **Authentication** — Microsoft Entra External ID JWT validation, `UserClaimsTransformation`, and how Admin role is derived from Cosmos rather than a shared secret
 - **Persistence layer** — `IGameRepository` / `IUserRepository` swappable backends, shared `CosmosClient`, `StjCosmosSerializer`, and environment-aware connection mode switching
-- **Azure Cosmos DB setup** — account configuration, container layout, 990 RU/s free-tier provisioning rationale, capacity and scale estimates
+- **Azure Cosmos DB setup** — account configuration, container layout, RU/s consumption provisioning rationale, capacity and scale estimates
 - **Budget guard** — lock-free in-memory counters, periodic Cosmos flush, monthly reset, enforcement points, and RU cost analysis
 - **SignalR hub design** — thin hub pattern (validate · delegate · broadcast), group management, and the disconnect/reconnect lifecycle
 - **React architecture** — how the shell bootstraps React, the component tree, event subscription pattern, and why there is no build pipeline
@@ -242,7 +248,7 @@ See [ADR.md](ADR.md) for the full architecture decision record covering:
 ```
 Player clicks Roll
   → gameHub.call('RollDice', gameId)
-      → Hub resolves caller identity from B2C objectId claim
+      → Hub resolves caller identity from Microsoft Entra External ID claim
           → GameRoomManager.ExecuteWithEngine delegates to GameEngine.RollDice under lock
               → Hub broadcasts GameStateUpdated + DiceRolled to all players in group
                   → React re-renders board, tokens, and cash
@@ -268,14 +274,14 @@ and persisted via `IGameRepository` for recovery across restarts.
 
 Switching backends requires no changes to engine or hub code. The persistence contract is fully isolated from game logic.
 
-A separate `users` container stores `UserDocument` records keyed by B2C objectId, created on first login and used to
-derive the Admin role. A `budget` container stores the single `BudgetDocument` tracking monthly free-tier consumption.
+A separate `users` container stores `UserDocument` records keyed by Microsoft Entra External ID, created on first login and used to
+derive the Admin role. A `budget` container stores the single `BudgetDocument` tracking monthly cloud resources consumption.
 
 ### Budget Guard
 
-`BudgetGuardService` enforces Azure Container Apps free-tier limits before any cost is incurred:
+`BudgetGuardService` enforces Azure Container Apps resources consumption before any cost is incurred:
 
-| Resource               | Free tier | Cap (90%) |
+| Resource               | Base tier | Cap (90%) |
 |------------------------|-----------|-----------|
 | vCPU-seconds / month   | 180,000   | 162,000   |
 | HTTP requests / month  | 2,000,000 | 1,800,000 |
@@ -293,7 +299,7 @@ with a `Retry-After` header pointing to the next monthly reset. The budget syste
 
 - **No auctions** — property stays unowned if declined; auctions slow games down
 - **No Newtonsoft.Json** — the entire stack uses System.Text.Json including Cosmos serialization
-- **No autoscale throughput** — Cosmos is provisioned at manual 990 RU/s to stay within the free tier ceiling
+- **No autoscale throughput** — Cosmos is provisioned at manual 1K RU/s to stay within the consumption ceiling
 - **No budget file persistence** — counters live in Cosmos so they survive container restarts; a local file would reset on every redeploy
 - **Admin access via role claim, not a shared key** — the Admin hub requires the Admin role on the authenticated principal; there is no `AdminKey` parameter or configuration value
 

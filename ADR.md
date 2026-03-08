@@ -7,7 +7,7 @@ Complete game engine covering all classic rules — card system, trading, jail, 
 held in memory for performance and persistence is swappable between repository implementations — either Azure Cosmos DB
 for production or JSON files for local development via app settings. Authentication is handled by Microsoft Entra
 External ID with social login (Google, Microsoft). Admin access is enforced by a role claim. A budget guard service
-enforces Azure Container Apps free-tier consumption limits and persists monthly counters to Cosmos DB.
+enforces Azure Container Apps base limit consumption limits and persists monthly counters to Cosmos DB.
 
 ---
 
@@ -62,7 +62,7 @@ MonopolyServer/
 │   │   ├── CosmosUserRepository.cs  # Cosmos user persistence
 │   │   ├── IUserRepository.cs       # User persistence contract
 │   │   ├── UserClaimsTransformation.cs  # Enriches principal with Admin role from Cosmos
-│   │   └── UserDocument.cs          # Cosmos user document (id = B2C objectId)
+│   │   └── UserDocument.cs          # Cosmos user document (id = Microsoft Entra External ID)
 │   ├── Budget/
 │   │   ├── BudgetDocument.cs        # Cosmos document tracking monthly resource consumption
 │   │   ├── BudgetGuardService.cs    # BackgroundService — in-memory counters, periodic Cosmos flush
@@ -141,7 +141,7 @@ Plain containers. No business logic lives in models.
 Getters only: `GetCurrentPlayer()` · `GetPlayerById()` · `LogAction()`
 
 **Player** — per-player state  
-`Id` (B2C objectId for authenticated players, GUID for bots) · `Name` · `Cash` · `Position` · `IsInJail` · `JailTurnsRemaining` · `KeptCards` · `IsBankrupt` ·
+`Id` (Microsoft Entra External ID for authenticated players, GUID for bots) · `Name` · `Cash` · `Position` · `IsInJail` · `JailTurnsRemaining` · `KeptCards` · `IsBankrupt` ·
 `IsCurrentPlayer` · `HasRolledDice`  
 Mutations only: `AddCash()` · `DeductCash()` · `MoveTo()` · `SendToJail()`
 
@@ -201,7 +201,7 @@ concurrent writes. Used in local development and as a zero-dependency fallback.
 nested JSON document via a custom `StjCosmosSerializer` wired into `CosmosClientOptions`, eliminating any Newtonsoft
 dependency. `CosmosClient` is registered as a singleton and shared between the game and user repositories.
 
-**`IUserRepository`** / **`CosmosUserRepository`** — users container, partition key `/id` (B2C objectId). Stores
+**`IUserRepository`** / **`CosmosUserRepository`** — users container, partition key `/id` (Microsoft Entra External ID). Stores
 `UserDocument` (objectId, email, displayName, isAdmin, timestamps). Created alongside the games container at startup.
 
 The active implementation is selected via `PersistenceSettings:UseDatabase` in configuration — `false` uses
@@ -216,7 +216,7 @@ Monopoly411 handles only CIAM auth (JWT issuance). The two tenants do not intera
 **Account settings:**
 - API: Azure Cosmos DB for NoSQL
 - Capacity mode: Provisioned throughput
-- Free tier discount: active (first 1,000 RU/s and 25 GB free)
+- base limit discount: active (first 1,000 RU/s and 25 GB free)
 - Availability zones: disabled
 - Geo-redundancy: disabled
 - Multi-region writes: disabled
@@ -230,8 +230,8 @@ Monopoly411 handles only CIAM auth (JWT issuance). The two tenants do not intera
 | `users`   | `/id`         | shared                     |
 | `budget`  | `/id`         | shared                     |
 
-Throughput is set to 990 RU/s — just under the 1,000 RU/s free tier ceiling — shared across all three containers.
-Manual throughput is used deliberately over autoscale to prevent the account from scaling beyond the free tier.
+Throughput is set to RU/s Consumption limit — just under the 1,000 RU/s base limit ceiling — shared across all three containers.
+Manual throughput is used deliberately over autoscale to prevent the account from scaling beyond the base limit.
 
 ### Cosmos DB — Connection Mode
 
@@ -265,15 +265,15 @@ No explicit environment check or build flag is needed — the endpoint value dri
 A complete game document is approximately 15–20 KB including the full board state, player records, event log, and
 pending trades. An upsert costs roughly 18 RUs at that size.
 
-| Metric | Value |
-|--------|-------|
-| RUs per game turn (3 saves × 18 RU) | ~54 RU |
-| Safe concurrent games at 990 RU/s | ~400–500 |
-| Monthly games budget (CPU-bound) | ~3,600 |
-| Monthly games budget (RU-bound) | ~950,000 |
-| Monthly games budget (HTTP requests) | ~8,200 |
+| Metric                                          | Value    |
+|-------------------------------------------------|----------|
+| RUs per game turn (3 saves × 18 RU)             | ~54 RU   |
+| Safe concurrent games at RU/s Consumption limit | ~400–500 |
+| Monthly games budget (CPU-bound)                | ~3,600   |
+| Monthly games budget (RU-bound)                 | ~950,000 |
+| Monthly games budget (HTTP requests)            | ~8,200   |
 
-CPU on Container Apps free tier (162,000 vCPU-seconds/month at 90% cap) is the binding constraint, not Cosmos throughput.
+CPU on Container Apps base limit (162,000 vCPU-seconds/month at 90% cap) is the binding constraint, not Cosmos throughput.
 The `BudgetGuardService` enforces `MaxConcurrentGames = 10` which keeps the server well within all ceilings.
 
 ### Startup Ordering
@@ -310,7 +310,7 @@ signals that `DefaultAzureCredential` should be used instead of key-based auth.
 
 ### Decision
 
-Azure Container Apps free-tier resources (vCPU-seconds, HTTP requests) are finite monthly allotments. Without
+Azure Container Apps base limit resources (vCPU-seconds, HTTP requests) are finite monthly allotments. Without
 enforcement, a traffic spike or runaway loop could exhaust the quota and incur unexpected charges. The budget guard
 enforces hard limits in-process before any cost is incurred, with no dependency on external billing APIs.
 
@@ -350,8 +350,8 @@ and the running consumption counters so they travel together and reset atomicall
 
 | Field | Default | Notes |
 |-------|---------|-------|
-| `maxCpuSeconds` | 162,000 | 90% of 180,000 free-tier vCPU-seconds |
-| `maxHttpRequests` | 1,800,000 | 90% of 2,000,000 free-tier requests |
+| `maxCpuSeconds` | 162,000 | 90% of 180,000 base limit vCPU-seconds |
+| `maxHttpRequests` | 1,800,000 | 90% of 2,000,000 base limit requests |
 | `maxConcurrentGames` | 10 | Hard cap on simultaneous active game sessions |
 | `maxConcurrentConnections` | 80 | Hard cap on simultaneous SignalR connections |
 | `consumedCpuSeconds` | — | Accumulated this window |
@@ -407,7 +407,7 @@ Admin access is a role claim derived from a `UserDocument` in Cosmos, not a shar
 
 ### Player Identity
 
-`Player.Id` is the B2C objectId — a persistent, provider-independent identifier that survives reconnections, session
+`Player.Id` is the Microsoft Entra External ID — a persistent, provider-independent identifier that survives reconnections, session
 changes, and social provider switches. Bots continue to use generated GUIDs.
 
 ### Flow
@@ -600,7 +600,7 @@ private async Task SendError(string method, string gameId, string message)
 
 ### Caller Identity
 
-Hub methods no longer resolve the calling player by `Context.ConnectionId`. They resolve by B2C objectId extracted from
+Hub methods no longer resolve the calling player by `Context.ConnectionId`. They resolve by Microsoft Entra External ID extracted from
 `Context.User` claims:
 
 ```csharp
@@ -825,7 +825,7 @@ Manages per-game countdown timers. Fires `TurnWarning` to the current player bef
 
 ### BudgetGuardService
 
-Background service tracking Azure Container Apps free-tier consumption. See [Budget Guard](#budget-guard) section for
+Background service tracking Azure Container Apps base limit consumption. See [Budget Guard](#budget-guard) section for
 full architecture. Registered as both a singleton (for direct method calls from middleware and hubs) and a hosted
 service (for `ExecuteAsync` background flush loop).
 
@@ -947,7 +947,7 @@ hub re-adds connection to the group, updates `ConnectionId` on the player record
 counters on container restart. The periodic flush pattern (5-minute interval, reload on startup) is the correct
 enterprise pattern: in-memory hot path, durable cold path, acceptable ~5-minute under-count window on unclean restart.
 
-**No autoscale throughput on Cosmos** — Manual provisioning at 990 RU/s keeps the account within the free tier
+**No autoscale throughput on Cosmos** — Manual provisioning at RU/s Consumption limit keeps the account within the base limit
 ceiling. Autoscale could silently breach the 1,000 RU/s threshold and incur charges.
 
 ---
@@ -975,6 +975,6 @@ ceiling. Autoscale could silently breach the 1,000 RU/s threshold and incur char
 - `BudgetMiddleware` is registered before `UseRouting` so it covers all endpoints including hubs
 - React components always return their unsubscribe functions from `useEffect`
 - Client never mutates game state locally — waits for `GameStateUpdated`
-- Player identity is always resolved from B2C objectId claims, never from `ConnectionId`
+- Player identity is always resolved from Microsoft Entra External ID claims, never from `ConnectionId`
 - Admin access is a Cosmos-persisted role claim, never a shared secret in config or a method parameter
-- Cosmos throughput is provisioned manually — autoscale is never used, free tier ceiling must not be breached
+- Cosmos throughput is provisioned manually — autoscale is never used, base limit ceiling must not be breached

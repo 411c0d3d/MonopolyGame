@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>Monopoly Online</title>
 
+    <!-- Emoji favicon — no image file required -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎲</text></svg>">
+
     <!-- UMD globals: React, ReactDOM, Babel, signalR -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
@@ -26,7 +29,6 @@
     constants.js must be first (defines MSAL_CLIENT_ID, MSAL_AUTHORITY, MSAL_SCOPE, React hooks, Ctx).
     auth_service.js must come before hub_service.js (hub uses authService.getToken).
     login_page.js must come before app.js.
-    Babel transpiles JSX at runtime via type="text/babel".
     globals.js is an IDE-only type shim and must NOT be loaded here.
 -->
 <script type="text/babel" src="animation/animation.js"></script>
