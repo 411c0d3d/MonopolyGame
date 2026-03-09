@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
 using MonopolyServer.Infrastructure;
@@ -9,15 +10,16 @@ namespace MonopolyServer.Data.Repositories.UserAuth;
 
 /// <summary>
 /// DI registration for authentication and authorization.
-/// Wires Microsoft Entra External ID JWT validation, SignalR token extraction,
-/// role-based authorization, and claim enrichment from Cosmos.
+/// Wires Entra External ID JWT, the GuestAuthHandler fallback scheme,
+/// a multi-scheme default authorization policy, and Cosmos claim enrichment.
 /// </summary>
 public static class AuthServiceExtensions
 {
     /// <summary>
-    /// Registers JWT auth against Entra External ID, authorization policies,
-    /// and the UserClaimsTransformation that enriches principals with roles from Cosmos.
-    /// Must be called after AddGamePersistence so the Cosmos client is available.
+    /// Registers all auth concerns. Must be called after AddGamePersistence.
+    /// The default authorization policy accepts either JWT or GuestScheme so that
+    /// plain [Authorize] on GameHub passes for both authenticated and guest connections.
+    /// AdminOnly policy still requires JWT + the Admin role.
     /// </summary>
     public static IServiceCollection AddGameAuth(
         this IServiceCollection services,
@@ -27,10 +29,13 @@ public static class AuthServiceExtensions
 
         services
             .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-            .AddMicrosoftIdentityWebApi(configuration.GetSection(AzureAdSettings.SectionName));
+            .AddMicrosoftIdentityWebApi(configuration.GetSection(AzureAdSettings.SectionName))
+            .Services
+            .AddAuthentication()
+            .AddScheme<AuthenticationSchemeOptions, GuestAuthHandler>(
+                GuestAuthHandler.SchemeName, _ => { });
 
         // CIAM issues tokens with aud = ClientId (bare), not api://ClientId.
-        // Accept both so the validator doesn't reject the token.
         var clientId = configuration[$"{AzureAdSettings.SectionName}:ClientId"] ?? string.Empty;
         services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
         {
@@ -40,8 +45,8 @@ public static class AuthServiceExtensions
                 $"api://{clientId}",
             ];
 
-            // SignalR passes the JWT as ?access_token= in the query string since
-            // browsers cannot set Authorization headers on WebSocket connections.
+            // SignalR passes the JWT as ?access_token= — browsers cannot set
+            // Authorization headers on WebSocket connections.
             var existing = options.Events;
 
             options.Events = new JwtBearerEvents
@@ -75,10 +80,24 @@ public static class AuthServiceExtensions
 
         services.AddAuthorization(options =>
         {
-            options.AddPolicy("AdminOnly", policy => policy.RequireRole(UserClaimsTransformation.AdminRole));
+            // Plain [Authorize] on GameHub succeeds if either scheme authenticates.
+            // This is what allows guests through while keeping the attribute meaningful.
+            options.DefaultPolicy = new AuthorizationPolicyBuilder(
+                    JwtBearerDefaults.AuthenticationScheme,
+                    GuestAuthHandler.SchemeName)
+                .RequireAuthenticatedUser()
+                .Build();
+
+            // AdminHub and any [Authorize("AdminOnly")] still require a real JWT + Admin role.
+            options.AddPolicy("AdminOnly", policy =>
+                policy
+                    .AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme)
+                    .RequireAuthenticatedUser()
+                    .RequireRole(UserClaimsTransformation.AdminRole));
         });
 
-        // Enriches every authenticated principal with roles from Cosmos
+        // Enriches every authenticated principal with roles from Cosmos.
+        // Guests are skipped — their "guest_" objectId won't exist in the users container.
         services.AddScoped<IClaimsTransformation, UserClaimsTransformation>();
 
         // Register IUserRepository — reuses the CosmosClient already registered by AddGamePersistence

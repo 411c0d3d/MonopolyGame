@@ -13,7 +13,7 @@ namespace MonopolyServer.Hubs;
 
 /// <summary>
 /// SignalR Hub for real-time Monopoly game communication.
-/// Requires authentication — player identity is derived from the B2C objectId claim.
+/// Authenticated via JWT (Entra) or the GuestAuthHandler scheme for guest players.
 /// All game state mutations go through GameRoomManager.MutateGame / InitializeEngine / ExecuteWithEngine.
 /// </summary>
 [Authorize]
@@ -1130,24 +1130,70 @@ public class GameHub : Hub
         Status = t.Status.ToString()
     };
 
-    /// <summary>
-    /// Resolves the calling player by their B2C objectId.
-    /// </summary>
+    /// <summary>Resolves the calling player by their objectId.</summary>
     private Player? GetCallingPlayer(GameState? game) =>
         game?.Players.FirstOrDefault(p => p.Id == GetCallerObjectId());
 
     /// <summary>
-    /// Extracts the B2C objectId from the authenticated user's claims.
+    /// Extracts the caller objectId from JWT claims (authenticated users) or the GuestAuth
+    /// principal synthesized by GuestAuthHandler (guest users).
+    /// Both paths arrive here as standard claims — no query-string reading needed at this level.
     /// </summary>
     private string? GetCallerObjectId() =>
         Context.User?.FindFirst(UserClaimsTransformation.ObjectIdClaimType)?.Value
         ?? Context.User?.FindFirst("oid")?.Value;
 
     /// <summary>
-    /// Extracts the display name from the authenticated user's claims.
+    /// Extracts the caller display name from claims. Works identically for JWT and guest principals.
     /// </summary>
     private string GetCallerDisplayName() =>
         Context.User?.FindFirst("name")?.Value
         ?? Context.User?.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
         ?? "Player";
+
+    /// <summary>
+    /// Removes a bot from the lobby. Host-only, waiting status only.
+    /// </summary>
+    public async Task RemoveBot(string gameId, string botId)
+    {
+        if (_roomManager.GetGame(gameId) == null)
+        {
+            throw new HubException("Game not found");
+        }
+
+        string? errorMsg = null;
+
+        var found = _roomManager.MutateGame(gameId, (g, _) =>
+        {
+            var caller = GetCallingPlayer(g);
+            if (caller == null || caller.Id != g.HostId)
+            {
+                errorMsg = "Only the host can remove bots";
+                return;
+            }
+
+            if (g.Status != GameStatus.Waiting)
+            {
+                errorMsg = "Bots can only be removed while the game is in the lobby";
+                return;
+            }
+
+            var bot = g.Players.FirstOrDefault(p => p.Id == botId && p.IsBot);
+            if (bot == null)
+            {
+                errorMsg = "Bot not found";
+                return;
+            }
+
+            g.Players.Remove(bot);
+            g.LogAction($"{bot.Name} was removed from the lobby.");
+        });
+
+        if (!found || errorMsg != null)
+        {
+            throw new HubException(!found ? "Game vanished before bot could be removed" : errorMsg!);
+        }
+
+        await PersistAndBroadcast(gameId);
+    }
 }

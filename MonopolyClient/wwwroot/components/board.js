@@ -135,26 +135,38 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
 
     const activePlayers = players || [];
 
+    // Stable color map: playerId → colorIndex. Never shrinks on player leave so
+    // remaining players keep their original color rather than inheriting a vacated slot.
+    const colorMapRef  = useRef(new Map());
+    const colorNextRef = useRef(0);
+
+    const getPlayerColor = (playerId) => {
+        if (!colorMapRef.current.has(playerId)) {
+            colorMapRef.current.set(playerId, colorNextRef.current++);
+        }
+        return COLORS[colorMapRef.current.get(playerId) % COLORS.length];
+    };
+
+    // Seed the map in current join order before any rendering reads from it.
+    activePlayers.forEach(p => getPlayerColor(p.id));
+
     const playersByPos = {};
-    activePlayers.forEach((p, i) => {
+    activePlayers.forEach((p) => {
         const pos = animatedPositions[p.id] ?? p.position;
         if (!playersByPos[pos]) {
             playersByPos[pos] = [];
         }
-        playersByPos[pos].push({...p, colorIdx: i});
+        playersByPos[pos].push({...p, color: getPlayerColor(p.id)});
     });
 
     const bg = (space) => {
         const bp = board?.find(b => b.id === space.id);
         if (bp?.ownerId) {
-            const idx = activePlayers.findIndex(p => p.id === bp.ownerId);
-            if (idx >= 0) {
-                const color = COLORS[idx % COLORS.length];
-                return {
-                    boxShadow: `inset 0 0 0 2px ${color}cc`,
-                    background: color + '14',
-                };
-            }
+            const color = getPlayerColor(bp.ownerId);
+            return {
+                boxShadow: `inset 0 0 0 2px ${color}cc`,
+                background: color + '14',
+            };
         }
         return {};
     };
@@ -549,7 +561,7 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
             </div>
 
             {/* Token overlay — persistent DOM elements with CSS-transitioned position */}
-            {activePlayers.map((p, i) => {
+            {activePlayers.map((p) => {
                 const displayPos = animatedPositions[p.id] ?? p.position;
                 const cell = cellPos[displayPos];
                 if (!cell) {
@@ -566,7 +578,7 @@ function Board({board, players, animatedPositions = {}, dice = [], rolling = fal
                             position: 'absolute',
                             top: cell.y + 3 + stackIdx * tokStack,
                             left: cell.x + cell.w - tokSize - 2,
-                            background: COLORS[i % COLORS.length],
+                            background: getPlayerColor(p.id),
                             color: '#fff',
                             width: tokSize,
                             height: tokSize,

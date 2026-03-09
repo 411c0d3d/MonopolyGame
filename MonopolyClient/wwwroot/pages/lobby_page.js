@@ -1,4 +1,4 @@
-/* globals useState, useEffect, useContext, Ctx, COLORS, gameHub, React */
+/* globals useState, useEffect, useRef, useContext, Ctx, COLORS, gameHub, React */
 
 // pages/lobby_page.js
 
@@ -12,6 +12,18 @@ function LobbyPage({gameId, userId, playerName, gameState: initialGameState, onS
     const [copied, setCopied]       = useState(false);
     const [botCount, setBotCount]   = useState(1);
     const [addingBots, setAddingBots] = useState(false);
+
+    // Stable color map: playerId → colorIndex. Never shrinks so departing players
+    // don't cause remaining players to inherit a different color.
+    const colorMapRef  = useRef(new Map());
+    const colorNextRef = useRef(0);
+
+    const getPlayerColor = (playerId) => {
+        if (!colorMapRef.current.has(playerId)) {
+            colorMapRef.current.set(playerId, colorNextRef.current++);
+        }
+        return COLORS[colorMapRef.current.get(playerId) % COLORS.length];
+    };
 
     useEffect(() => {
         if (initialGameState) { setGameState(initialGameState); }
@@ -27,6 +39,9 @@ function LobbyPage({gameId, userId, playerName, gameState: initialGameState, onS
     const players = gameState?.players || [];
     const hostId  = gameState?.hostId;
 
+    // Seed the color map with current players so colors are assigned in join order.
+    players.forEach(p => getPlayerColor(p.id));
+
     // Host check uses objectId (B2C persistent identity), not name.
     const isHost = isCreator || userId === hostId;
 
@@ -41,6 +56,11 @@ function LobbyPage({gameId, userId, playerName, gameState: initialGameState, onS
         if (!confirm(`Kick ${player.name}?`)) { return; }
         gameHub.call('KickPlayer', gameId, player.id)
             .catch(e => toast(e.message || 'Failed to kick player', 'error'));
+    };
+
+    const handleRemoveBot = (player) => {
+        gameHub.call('RemoveBot', gameId, player.id)
+            .catch(e => toast(e.message || 'Failed to remove bot', 'error'));
     };
 
     const handleAddBots = () => {
@@ -75,9 +95,9 @@ function LobbyPage({gameId, userId, playerName, gameState: initialGameState, onS
 
                     <div className="slabel">Players ({players.length}/8)</div>
                     <div className="plist">
-                        {players.map((player, i) => (
+                        {players.map((player) => (
                             <div key={player.id} className="pitem">
-                                <div className="pav" style={{background: COLORS[i % COLORS.length], color: '#fff'}}>
+                                <div className="pav" style={{background: getPlayerColor(player.id), color: '#fff'}}>
                                     {player.name[0].toUpperCase()}
                                 </div>
                                 <div style={{flex: 1}}>
@@ -88,7 +108,16 @@ function LobbyPage({gameId, userId, playerName, gameState: initialGameState, onS
                                 </div>
                                 {player.id === hostId && <span className="badge bg-yellow">👑 Host</span>}
                                 {player.id === userId  && <span className="badge bg-blue">You</span>}
-                                {isHost && player.id !== hostId && !player.isBot && (
+                                {isHost && player.isBot && (
+                                    <button
+                                        className="btn btn-ghost btn-sm"
+                                        style={{fontSize: 11, padding: '2px 8px', color: '#e55', borderColor: '#e55'}}
+                                        onClick={() => handleRemoveBot(player)}
+                                    >
+                                        Remove
+                                    </button>
+                                )}
+                                {isHost && !player.isBot && player.id !== hostId && (
                                     <button
                                         className="btn btn-ghost btn-sm"
                                         style={{fontSize: 11, padding: '2px 8px', color: '#e55', borderColor: '#e55'}}

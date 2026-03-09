@@ -10,13 +10,16 @@ class HubService {
 
     /**
      * Builds and starts the SignalR connection.
-     * accessTokenFactory ensures every WebSocket upgrade and reconnect
-     * sends a fresh JWT as ?access_token= — required because browsers
-     * cannot set Authorization headers on WebSocket connections.
+     * Authenticated users: JWT delivered via accessTokenFactory (?access_token=).
+     * Guest users: identity delivered via guest_id / guest_name query-string params.
+     * Browsers cannot set Authorization headers on WebSocket connections, so both
+     * paths use the query string, which is the SignalR-standard workaround.
      */
     start() {
+        const hubUrl = this._buildHubUrl();
+
         this._conn = new signalR.HubConnectionBuilder()
-            .withUrl(`${SERVER_URL}/game-hub`, {
+            .withUrl(hubUrl, {
                 accessTokenFactory: () => authService.getToken(),
             })
             .withAutomaticReconnect([0, 2000, 5000, 10000])
@@ -48,6 +51,23 @@ class HubService {
         this._conn.onclose(() => this._fire('Closed'));
 
         return this._conn.start();
+    }
+
+    /**
+     * Builds the hub URL. For guest sessions the objectId and display name are
+     * appended as query params so the server can identify the caller without a JWT.
+     */
+    _buildHubUrl() {
+        const base = `${SERVER_URL}/game-hub`;
+        if (!authService.isGuest()) {
+            return base;
+        }
+        const user = authService.getUser();
+        const params = new URLSearchParams({
+            guest_id:   user.objectId,
+            guest_name: user.name,
+        });
+        return `${base}?${params.toString()}`;
     }
 
     /** Subscribes to a hub event. Returns an unsubscribe function. */

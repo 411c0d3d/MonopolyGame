@@ -717,30 +717,34 @@ function LiquidateBuildingsModal({myProperties, boardSpaces, me, gameId, onClose
 // ─── CardDrawnModal ───────────────────────────────────────────────────────────
 
 // Card types that give the player something good (green / plus).
+// String names match CardType enum; numeric indices guard against C# default int serialization.
+// CardType enum order: MoveToGo=0, MoveToJail=1, MoveToJustVisiting=2, MoveForward=3,
+//   MoveBackward=4, MoveToSpecificLocation=5, PayBank=6, CollectFromBank=7,
+//   PayEachPlayer=8, CollectFromEachPlayer=9, PayForHouseRepairs=10, GetOutOfJailFree=11, Advance=12
 const POSITIVE_CARD_TYPES = new Set([
-    'MoveToGo',
-    'MoveToJustVisiting',
-    'MoveForward',
-    'CollectFromBank',
-    'CollectFromEachPlayer',
-    'GetOutOfJailFree',
-    'Advance',
+    'MoveToGo', 0,
+    'MoveToJustVisiting', 2,
+    'MoveForward', 3,
+    'CollectFromBank', 7,
+    'CollectFromEachPlayer', 9,
+    'GetOutOfJailFree', 11,
+    'Advance', 12,
 ]);
 
 // Card types that cost the player something (red / minus).
 const NEGATIVE_CARD_TYPES = new Set([
-    'MoveToJail',
-    'MoveBackward',
-    'PayBank',
-    'PayEachPlayer',
-    'PayForHouseRepairs',
+    'MoveToJail', 1,
+    'MoveBackward', 4,
+    'PayBank', 6,
+    'PayEachPlayer', 8,
+    'PayForHouseRepairs', 10,
 ]);
 
-/** Returns 'positive', 'negative', or 'neutral' for a CardType enum value. */
+/** Returns 'positive', 'negative', or 'neutral' for a CardType enum value (string or integer). */
 const getCardSentiment = (type) => {
     if (POSITIVE_CARD_TYPES.has(type)) { return 'positive'; }
     if (NEGATIVE_CARD_TYPES.has(type)) { return 'negative'; }
-    // Fall back to amount sign when type is ambiguous or a deck label.
+    // MoveToSpecificLocation (5) and unknown types fall through; amount sign is the tiebreaker.
     return 'neutral';
 };
 

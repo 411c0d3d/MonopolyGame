@@ -204,16 +204,19 @@ const SPACES = window.SPACES;
  */
 
 /** @type {IGameHub} */
-const gameHub = window.gameHub;
+let gameHub = window.gameHub;
 
 /**
  * @typedef {{
- *   initialize():Promise<MsalAccount|null>,
+ *   initialize():Promise<MsalAccount|{objectId:string,name:string}|null>,
  *   isAuthenticated():boolean,
- *   getUser():{ objectId:string, name:string, email:string }|null,
+ *   isGuest():boolean,
+ *   getUser():{ objectId:string, name:string, email:string|null }|null,
  *   getToken():Promise<string|null>,
  *   isAdmin():Promise<boolean>,
  *   login():Promise<void>,
+ *   loginAsGuest(name:string):void,
+ *   clearGuest():void,
  *   logout():Promise<void>,
  *   saveSessionGame(gameId:string):void,
  *   getSessionGame():string|null,

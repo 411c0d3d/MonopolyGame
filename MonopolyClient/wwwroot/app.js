@@ -28,38 +28,44 @@ function App() {
     // -------------------------------------------------------------------------
     // Auth init — runs once on mount
     // -------------------------------------------------------------------------
+
+    /**
+     * Shared post-auth startup: sets user state, resolves admin flag, starts the hub,
+     * and restores any saved game session. Works for both MSAL and guest sessions.
+     * isAdmin() always resolves false for guests so no special-casing is needed.
+     */
+    const startSession = useCallback(async () => {
+        const currentUser = authService.getUser();
+        setUser(currentUser);
+
+        const admin = await authService.isAdmin();
+        setIsAdmin(admin);
+
+        gameHub.start()
+            .then(() => toast('Connected', 'success'))
+            .catch(() => toast(`Cannot connect to ${SERVER_URL}`, 'error'));
+
+        const savedGameId = authService.getSessionGame();
+        if (savedGameId) {
+            setGameId(savedGameId);
+            gameHub.call('JoinGame', savedGameId)
+                .then(() => setPage('lobby'))
+                .catch(() => {
+                    authService.clearSessionGame();
+                    setPage('home');
+                });
+        } else {
+            setPage('home');
+        }
+    }, [toast]);
+
     useEffect(() => {
-        authService.initialize().then(async account => {
+        authService.initialize().then(account => {
             if (!account) {
-                // Not authenticated — show login page
                 setPage('login');
                 return;
             }
-
-            const currentUser = authService.getUser();
-            setUser(currentUser);
-
-            const admin = await authService.isAdmin();
-            setIsAdmin(admin);
-
-            // Start hub with JWT attached
-            gameHub.start()
-                .then(() => toast('Connected', 'success'))
-                .catch(() => toast(`Cannot connect to ${SERVER_URL}`, 'error'));
-
-            // Restore session game if user was in a game before refresh
-            const savedGameId = authService.getSessionGame();
-            if (savedGameId) {
-                setGameId(savedGameId);
-                gameHub.call('JoinGame', savedGameId)
-                    .then(() => setPage('lobby'))
-                    .catch(() => {
-                        authService.clearSessionGame();
-                        setPage('home');
-                    });
-            } else {
-                setPage('home');
-            }
+            startSession();
         });
 
         const unsubscribers = [
@@ -123,6 +129,11 @@ function App() {
         setPage('home');
     };
 
+    const handleGuest = (name) => {
+        authService.loginAsGuest(name);
+        startSession();
+    };
+
     // -------------------------------------------------------------------------
     // Render
     // -------------------------------------------------------------------------
@@ -137,7 +148,7 @@ function App() {
     }
 
     if (page === 'login') {
-        return <LoginPage onLogin={() => authService.login()}/>;
+        return <LoginPage onLogin={() => authService.login()} onGuest={handleGuest}/>;
     }
 
     return (
